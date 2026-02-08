@@ -1,0 +1,863 @@
+#!/bin/bash
+
+fq_dir="$HOME/gfw"
+packages="dnsutils wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full tmux qrencode"
+cert_dir="$fq_dir/cf_cert"
+domain_file="$cert_dir/domain.txt"
+
+# ---
+# 1. 安装必要的软件包
+# ---
+install_pkgs_and_setup_env() {
+    echo "---"
+    echo "开始安装必要的软件包: $packages"
+    echo "---"
+    sudo apt update
+    sudo apt install -y $packages
+
+    if [ $? -eq 0 ]; then
+        echo "✅ 所有软件包已成功安装！"
+    else
+        echo "❌ 安装过程中出现错误，请检查上面的输出。"
+        return 1
+    fi
+
+    echo "---"
+    echo "设置系统环境"
+    echo "---"
+    if grep -q "ss_port" "$HOME/.bashrc"; then
+        echo "✅ .bashrc 环境似乎已配置过，跳过写入。"
+    else
+        echo "正在配置 .bashrc..."
+        cat <<EOF >> $HOME/.bashrc
+alias ll='ls -l'
+alias t='tmux a -t 0'
+alias tailf='tail -f'
+export SYSTEMD_EDITOR=vim
+ss_port() {
+    if [ -z "$1" ]; then
+        echo "错误：请传入一个端口号。"
+        return 1
+    fi
+
+    # 使用正则表达式检查是否为纯数字
+    if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+        echo "错误：'$1' 不是一个有效的数字。"
+        return 1
+    fi
+
+    if [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; then
+        sudo ss -ltnp "sport = :$1"
+    else
+        echo "错误：端口号 '$1' 必须在1到65535之间。"
+        return 1
+    fi
+}
+EOF
+    fi
+    cat <<EOF > $HOME/.inputrc
+"\e[A":history-search-backward
+"\e[B":history-search-forward
+EOF
+    cat <<EOF > $HOME/.vimrc
+syntax enable
+set nu
+set autoindent
+set expandtab
+set tabstop=4
+set shiftwidth=4
+set backspace=indent,eol,start
+set mouse=a
+EOF
+    cat <<EOF > $HOME/.tmux.conf
+set-option -g display-time 1000		# msg display time, 1000 ms
+
+set-option -g prefix C-j
+unbind-key C-b
+bind-key C-j send-prefix 
+
+bind r source-file ~/.tmux.conf \; display "Reloaded!"	    # reload config file
+
+bind c new-window -c "#{pane_current_path}"
+bind | split-window -h -c "#{pane_current_path}"    # horizontal
+bind - split-window -v -c "#{pane_current_path}"    # vertical
+bind h select-pane -L
+bind j select-pane -D
+bind k select-pane -U
+bind l select-pane -R
+bind -r H resize-pane -L 5  # if want to expand large space, press H several times
+bind -r J resize-pane -D 5
+bind -r K resize-pane -U 5
+bind -r L resize-pane -R 5
+
+set -g default-terminal "screen-256color"
+set -g status-fg white
+set -g status-bg black
+
+set -g status-style bright
+
+# default window title colors
+set-window-option -g window-status-style fg=cyan
+set-window-option -g window-status-style bg=default
+set-window-option -g window-status-style dim
+
+# active window title colors
+set-window-option -g window-status-current-style fg=white
+set-window-option -g window-status-current-style bg=red
+set-window-option -g window-status-current-style bright
+
+# Highlight active window
+set-window-option -g window-status-current-style bg=red
+
+#setw -g window-status-fg cyan
+#setw -g window-status-bg default
+#setw -g window-status-attr dim
+#setw -g window-status-current-fg white
+#setw -g window-status-current-bg red
+#setw -g window-status-current-attr bright
+#setw -g mode-mouse on
+#set -g mouse-select-pane on
+#set -g mouse-select-window on
+#set -g mouse-resize-pane on
+set -g status-left "#[fg=green][#S]"
+set -g status-right "#[fg=cyan]#H %d-%b %R"
+set -g status-interval 60   # update time every 60 sec
+EOF
+}
+
+# ---
+# 2. 申请或更新证书
+# ---
+apply_or_renew_cert() {
+    local cf_ini="$cert_dir/cf.ini"
+    local domain=""
+    local cf_token=""
+
+    echo "---"
+    echo "开始为您的域名申请泛域名证书"
+    echo "请登录 Cloudflare，前往“API 令牌”页面，创建一个 DNS 编辑令牌。"
+    echo "详细步骤请参考：Login Cloudflare, Go to \"API Tokens\", create dns edit token, then copy."
+    echo "---"
+    
+    mkdir -p "$cert_dir"
+    cd "$cert_dir" || { echo "无法进入目录 $cert_dir，退出。"; return 1; }
+
+    # 检查 cf.ini 文件是否存在及权限
+    if [ -f "$cf_ini" ]; then
+        chmod 600 "$cf_ini"
+        echo "✅ 从 $cf_ini 文件读取 API Token..."
+    else
+        read -p "请粘贴您的 Cloudflare API Token: " cf_token
+        if [ -z "$cf_token" ]; then
+            echo "❌ 错误：API Token 不能为空。"
+            return 1
+        fi
+        echo "dns_cloudflare_api_token = $cf_token" > "$cf_ini"
+        chmod 600 "$cf_ini"
+        echo "✅ API Token 已保存到 $cf_ini，并设置权限为 600。"
+    fi
+
+    if [ -f "$domain_file" ]; then
+        domain=$(head -n 1 "$domain_file")
+        echo "从文件 $domain_file 中读取到域名：$domain"
+    fi
+    if [ -z "$domain" ]; then
+        read -p "请输入您的域名 (例如：example.com): " domain
+        if [ -z "$domain" ]; then
+            echo "❌ 错误：域名不能为空。"
+            return 1
+        else
+            echo "$domain" > "$domain_file"
+        fi
+    fi
+
+    echo "---"
+    echo "正在使用 Certbot 申请证书..."
+    sudo certbot certonly \
+        --no-eff-email \
+        --dns-cloudflare \
+        --dns-cloudflare-credentials "$cf_ini" \
+        --agree-tos \
+        -d "$domain" \
+        -d "*.$domain" \
+      --preferred-challenges dns
+
+    if [ $? -eq 0 ]; then
+        echo ""
+        echo "✅ 证书申请成功！证书文件已保存在 /etc/letsencrypt/live/$domain/ 目录下。"
+    else
+        echo ""
+        echo "❌ 证书申请失败。请检查您的域名、API Token 以及 DNS 配置。"
+    fi
+}
+
+# ---
+# 3. 添加 IPv4 支持 (WARP)
+# ---
+add_ipv4_by_warp() {
+    local warp_dir="$fq_dir/cf_warp"
+    
+    echo "---"
+    echo "正在检查系统IPv4连接..."
+    echo "---"
+
+    # curl -4 ip.p3terx.com
+    # curl -4 ip.sb
+    #if ping -c 1 -W 1 -4 ipv4.google.com &>/dev/null; then
+    #    echo "✅ 系统已有IPv4出口，无需配置WARP。"
+    #    return 0
+    #else
+    #    echo "⚠️ 系统没有IPv4出口，将开始配置WARP。"
+    #fi
+    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
+       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+        echo "✅ 检测到系统已有 IPv4 出口，无需配置 WARP。"
+        return 0
+    else
+        echo "⚠️ 未检测到有效的 IPv4 出口，准备配置 WARP 接管 IPv4 流量。"
+    fi
+    
+    mkdir -p "$warp_dir"
+    cd "$warp_dir" || { echo "无法进入目录 $warp_dir，退出。"; return 1; }
+
+    local arch=$(dpkg --print-architecture)
+    while true; do
+        echo "------------------------------------------------"
+        echo "⚠️  检测到可能是纯 IPv6 环境，无法自动从 GitHub 下载 wgcf。"
+        echo "请手动下载 wgcf 并上传到服务器。"
+        echo ""
+        echo "1. 请在您的电脑上下载此文件(根据您的架构 $arch):"
+        echo "   下载地址: https://github.com/ViRb3/wgcf/releases/"
+        echo ""
+        echo "2. 将文件上传到服务器的此目录: $warp_dir"
+        echo "   (您可以使用 SFTP 工具，或者 scp 命令)"
+        echo "------------------------------------------------"
+
+        read -p "✅ 上传完成后，请按 Enter 键继续检查..."
+
+        local wgcf_file=$(ls -1t wgcf_* | head -n 1)
+        if [[ -z "$wgcf_file" ]]; then
+            echo "❌ 仍未检测到文件，请检查上传路径是否正确。"
+        else
+            echo "✅ 检测到 wgcf 文件！"
+            chmod +x "$wgcf_file"
+            break
+        fi
+    done
+    
+    local bin_dir="$HOME/bin"
+    mkdir -p "$bin_dir"
+    ln -sf "$warp_dir/$wgcf_file" "$bin_dir/wgcf"
+    echo "✅ 已在 ~/bin 目录创建 wgcf 软链接。"
+    
+    if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+        echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+        echo "⚠️ ~/bin 已添加到 PATH，请重新启动终端或执行 'source ~/.bashrc' 使其生效。"
+        source "$HOME/.bashrc"
+    fi
+
+    echo "---"
+    echo "正在注册 WARP 账户..."
+    $bin_dir/wgcf register --accept-tos
+    
+    echo "正在生成 WireGuard 配置文件..."
+    $bin_dir/wgcf generate
+
+    if [ $? -ne 0 ]; then
+        echo "wgcf 注册和生成配置失败，退出..."
+        return 1
+    fi
+
+    cp wgcf-account.toml wgcf-account.toml.bak
+    cp wgcf-profile.conf wgcf-profile.conf.bak
+    echo "✅ 配置文件已备份。"
+
+    echo "---"
+    echo "正在解析 WARP 节点地址..."
+    local warp_ipv6=""
+
+    # 尝试解析
+    if command -v nslookup &> /dev/null; then
+        # grep 'Address:' | grep -oP '([0-9a-fA-F]{1,4}){0,1}:([0-9a-fA-F]{1,4}){0,1}:[0-9a-fA-F:]+' | head -n 1)
+         warp_ipv6=$(nslookup -type=AAAA engage.cloudflareclient.com 2>/dev/null | grep 'Address:' | tail -n1 | awk '{print $2}')
+    fi
+
+    # 如果解析失败，使用 Cloudflare 官方固定 IPv6 地址兜底
+    if [[ -z "$warp_ipv6" ]]; then
+        echo "⚠️ 自动解析失败，使用 Cloudflare 默认 IPv6 节点。"
+        warp_ipv6="2606:4700:d0::a29f:c001"
+    else
+        echo "✅ 解析成功: $warp_ipv6"
+    fi
+    # 先去掉可能存在的方括号，再统一加上
+    warp_ipv6=$(echo "$warp_ipv6" | tr -d '[]')
+    echo "✅ 解析到的 WARP IPv6 地址：$warp_ipv6"
+
+    sed -i "s/DNS = .*/DNS = 2001:4860:4860::8888, 2001:4860:4860::8844, 8.8.8.8, 8.8.4.4/" wgcf-profile.conf
+    sed -i "s/AllowedIPs = .*/AllowedIPs = 0.0.0.0\/0/" wgcf-profile.conf
+    sed -i "s/Endpoint = .*/Endpoint = [${warp_ipv6}]:2408/" wgcf-profile.conf
+    echo "✅ 配置文件已修改，准备启动 WARP..."
+
+    sudo wg-quick up wgcf-profile.conf
+    if [ $? -ne 0 ]; then
+        echo "wg-quick up 执行失败，退出..."
+        return 1
+    fi
+
+    echo "正在验证连接..."
+    if ! curl -4 -s --connect-timeout 5 https://1.1.1.1 >/dev/null; then
+        echo "❌ WARP 启动后无法访问 IPv4，正在回滚..."
+        sudo wg-quick down wgcf-profile.conf
+        return 1
+    fi
+    echo "✅ IPv4 连接测试成功！"
+    sudo wg-quick down wgcf-profile.conf
+
+    read -p "将安装WARP为系统服务，确认后按 Enter 继续..."
+    echo "---"
+    echo "正在安装 WARP 为系统服务..."
+    sudo cp wgcf-profile.conf /etc/wireguard/wgcf0.conf
+    sudo systemctl enable wg-quick@wgcf0
+    sudo systemctl start wg-quick@wgcf0
+
+    sleep 3
+    echo "---"
+    echo "正在再次检查 IPv4 连接..."
+    if curl -4 -s --connect-timeout 3 https://1.1.1.1 >/dev/null; then
+        echo "✅✅ WARP 启动成功！系统现在拥有了 IPv4 访问能力。"
+    else
+        echo "❌ WARP 启动似乎成功，但无法访问 IPv4 网络。"
+        echo "请检查 status: sudo systemctl status wg-quick@wgcf0"
+        return 1
+    fi
+}
+
+# ---
+# 4. 安装 Xray
+# ---
+install_xray() {
+    local xray_dir="$fq_dir/xray"
+    
+    echo "---"
+    echo "正在下载并安装 Xray..."
+    #sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
+    sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+    mkdir -p "$xray_dir"
+    cd "$xray_dir" || { echo "❌ 错误: 无法进入目录 $xray_dir。请检查路径或权限。"; return 1; }
+    echo "✅ 进入目录: $xray_dir"
+
+    # 生成或加载 Xray 配置
+    echo "---"
+    echo "正在生成或加载 Xray 配置所需的密钥和ID..."
+    local xray_key_file="$xray_dir/xray.key"
+    local PrivateKey=""
+    local uuid1=""
+    local uuid2=""
+    local sid1=""
+    local sid2=""
+    local xhttp_path=""
+
+    if [ -f "$xray_key_file" ]; then
+        echo "✅ 从 $xray_key_file 读取配置..."
+        source <(grep -E '^(PrivateKey|uuid1|uuid2|sid1|sid2|xhttp_path):' "$xray_key_file" | sed 's/:\s*/="/;s/$/"/' | sed 's/\(.*\)/export \1/')
+        if [ -z "$PrivateKey" ] || [ -z "$uuid1" ] || [ -z "$uuid2" ] || [ -z "$sid1" ] || [ -z "$sid2" ] || [ -z "$xhttp_path" ]; then
+            echo "❌ 错误：配置文件 $xray_key_file 缺少必要的变量。将重新生成。"
+            rm -f "$xray_key_file"
+        else
+            echo "✅ 配置加载成功。"
+        fi
+    fi
+
+    if [ ! -f "$xray_key_file" ]; then
+        echo "生成新的 Xray 配置..."
+        xray x25519 > $xray_key_file
+        PrivateKey=$(cat $xray_key_file | grep "PrivateKey:" | awk '{print $2}')
+        if [ -z "$PrivateKey" ]; then
+            echo "❌ 错误: 无法获取 Privatekey。请检查 Xray 是否安装成功。"
+            return 1
+        fi
+        echo "✅ 已生成 Privatekey。"
+        
+        uuid1=$(xray uuid)
+        uuid2=$(xray uuid)
+        sid1=$(openssl rand -hex 4)
+        sid2=$(openssl rand -hex 4)
+        xhttp_path=$(openssl rand -hex 5)
+
+        echo "✅ 已生成 UUID 和 ShortIds。"
+        echo "正在保存配置到 $xray_key_file..."
+        {
+            echo "uuid1:$uuid1"
+            echo "uuid2:$uuid2"
+            echo "sid1:$sid1"
+            echo "sid2:$sid2"
+            echo "xhttp_path:$xhttp_path"
+        } >> "$xray_key_file"
+        echo "✅ 配置已保存。"
+    fi
+
+    echo "---"
+    echo "正在创建 config.jsonc 文件..."
+    cat << EOF > config.jsonc
+{
+  "stats": {},
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning",
+    "dnsLog": false
+  },
+  "inbounds": [
+    {
+      "listen": "::",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$uuid1", // xray uuid
+            "flow": "xtls-rprx-vision"
+          },
+          {
+            "id": "$uuid2",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        //"network": "xhttp",
+        //"xhttpSettings": {
+        //  "path": "/$xhttp_path"
+        //},
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "xver": 0,
+          // 目标网站最低标准：国外网站，支持 TLSv1.3 与 H2，域名非跳转用（主域名可能被用于跳转到 www）。
+          // 详见 https://github.com/XTLS/REALITY
+          "target": "www.microsoft.com:443",
+          "serverNames": [
+            // 客户端可用的 serverName 列表，暂不支持 * 通配符
+            // 执行 xray tls ping 目标网站网址，填 "Allowed domains" 的值
+            "www.microsoft.com",
+            "wwwqa.microsoft.com",
+            "staticview.microsoft.com",
+            "i.s-microsoft.com",
+            "microsoft.com",
+            "c.s-microsoft.com",
+            "privacy.microsoft.com"
+          ],
+          //"target": "www.lovelive-anime.jp:443",
+          //"serverNames": [
+          //  "lovelive-anime.jp",
+          //  "www.lovelive-anime.jp"
+          //],
+          "privateKey": "$PrivateKey", // xray x25519
+          "minClientVer": "",
+          "maxClientVer": "",
+          "maxTimeDiff": 0,
+          "shortIds": [
+            //"",    // 若有此项，客户端 shortId 可为空
+            "$sid1", // 0 到 f，长度为 2 的倍数，长度上限为 16
+            "$sid2"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "default"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "geoip:cn"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:cn"
+        ],
+        "outboundTag": "block"
+      }
+    ]
+  }
+}
+EOF
+
+    echo "config.jsonc 已创建。您可以修改此文件以更改目标网站或配置。"
+    read -p "修改完毕请按 Enter 继续..."
+
+    local sys_conf="/usr/local/etc/xray/config.json"
+    echo "---"
+    echo "正在将配置保存到 $sys_conf..."
+    if ! command -v jq &> /dev/null; then
+        echo "⚠️ 警告: 未找到 jq 命令，无法格式化 JSON。将直接保存配置。"
+        sed -e 's/\/\/.*//' config.jsonc | sudo tee "$sys_conf" > /dev/null
+    else
+        sed -e 's/\/\/.*//' config.jsonc | jq . | sudo tee "$sys_conf" > /dev/null
+    fi
+    
+    ln -sf "$sys_conf" config.json
+    read -p "请检查 config.json，确认后按 Enter 启动 Xray 服务..."
+
+    # 从最终的系统配置文件中提取 target
+    local extracted_target=""
+    if command -v jq &> /dev/null; then
+        extracted_target=$(jq -r '.inbounds[0].streamSettings.realitySettings.target' "$sys_conf")
+    else
+        extracted_target=$(grep '"target":' "$sys_conf" | cut -d'"' -f4)
+    fi
+    local clean_target=${extracted_target%:*}
+
+    if [ -n "$clean_target" ]; then
+        # 检查 xray.key 中是否已经存在 target 行
+        if grep -q "^target:" "$xray_key_file"; then
+            # 如果存在，替换它
+            sed -i "s/^target:.*/target:$clean_target/" "$xray_key_file"
+        else
+            # 如果不存在，追加它
+            echo "target:$clean_target" >> "$xray_key_file"
+        fi
+        echo "✅ 已提取并保存 target 域名到 xray.key: $clean_target"
+    else
+        echo "⚠️ 警告: 未能从配置文件中提取到 target 域名。"
+    fi
+
+    echo "---"
+    echo "正在启动 Xray 服务..."
+    sudo systemctl restart xray
+    sudo systemctl status xray --no-pager
+    echo "✅ Xray 服务已启动。"
+
+    echo "---"
+    echo "正在查询公网 IP 地址 (Cloudflare DNS)..."
+
+    local ip_v4=""
+    local ip_v6=""
+
+    # 1. 查询 IPv4 (dig @1.1.1.1)
+    # ch = Chaos class, txt = TXT record, whoami.cloudflare = magic domain
+    # tr -d '"' 用于去除结果中的引号
+    if command -v dig &> /dev/null; then
+        ip_v4=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+    fi
+
+    # 2. 查询 IPv6 (dig @2606:4700:4700::1111)
+    if command -v dig &> /dev/null; then
+        ip_v6=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+    fi
+
+    # 3. 将 IP 保存到 xray.key
+    # 先删除旧的记录 (如果有)
+    sed -i '/^ipv4:/d' "$xray_key_file"
+    sed -i '/^ipv6:/d' "$xray_key_file"
+
+    echo "ipv4:$ip_v4" >> "$xray_key_file"
+    echo "ipv6:$ip_v6" >> "$xray_key_file"
+
+    echo "✅ IP 信息已更新到 $xray_key_file"
+    echo "   IPv4: ${ip_v4:-[无]}"
+    echo "   IPv6: ${ip_v6:-[无]}"
+
+    # --- 新增功能：生成优化后的二维码 ---
+    echo "---"
+    echo "正在生成配置二维码..."
+    if command -v qrencode &> /dev/null; then
+        echo ""
+        # 技巧：
+        # 1. echo "# hi" 添加头部欺骗 iOS 相机
+        # 2. grep -v 过滤掉包含 PrivateKey 的敏感行
+        # 3. 管道传给 qrencode
+        { echo "# hi"; grep -v "PrivateKey" "$xray_key_file"; } | qrencode -t ansiutf8
+
+        echo ""
+        echo "💡 提示：请使用 iPhone 相机扫描上方二维码 (已隐藏私钥，并添加头部修正识别问题)。"
+    else
+        echo "⚠️ 未找到 qrencode 命令，跳过二维码生成。"
+    fi
+}
+
+# ---
+# 5. 更新 Nginx 配置 (Stream & Site)
+# ---
+update_nginx_config() {
+    local domain=""
+    
+    echo "---"
+    echo "正在准备更新 Nginx 配置..."
+    
+    # 1. 获取域名
+    if [ -f "$domain_file" ]; then
+        domain=$(head -n 1 "$domain_file")
+        echo "✅ 读取到域名：$domain"
+    else
+        read -p "无法自动读取域名，请输入您的域名: " domain
+        if [ -z "$domain" ]; then
+            echo "❌ 域名不能为空，退出。"
+            return 1
+        fi
+    fi
+    if [ ! -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+        echo "❌ 错误：未找到域名 $domain 的证书文件。"
+        echo "请先执行步骤 2 申请证书，或检查域名是否一致。"
+        return 1
+    fi
+
+    # 2. 修改 nginx.conf (添加 Stream 模块)
+    local nginx_conf="/etc/nginx/nginx.conf"
+    
+    # 备份原始配置
+    if [ ! -f "${nginx_conf}.bak_script" ]; then
+        sudo cp "$nginx_conf" "${nginx_conf}.bak_script"
+        echo "✅ 已备份原始 nginx.conf 到 ${nginx_conf}.bak_script"
+    fi
+
+    # 检查是否已经存在 stream 配置，避免重复添加
+    if grep -q "upstream xray_reality" "$nginx_conf"; then
+        echo "⚠️ 检测到 nginx.conf 中似乎已包含 stream 配置，跳过 stream 块写入。"
+    else
+        echo "正在向 nginx.conf 写入 stream 配置..."
+        
+        # 创建临时文件存放 stream 配置内容 (注意：这里 \$ 转义了 Nginx 变量)
+        cat <<EOF > /tmp/nginx_stream.tmp
+stream {
+    map \$ssl_preread_server_name \$backend {
+        www.microsoft.com   xray_reality;
+        wwwqa.microsoft.com     xray_reality_aliyun;
+        www.lovelive-anime.jp    xray_xhttp;
+        privacy.microsoft.com   sb_reality;
+        default         my_nginx;
+    }
+    upstream xray_reality {
+        server [::1]:6443;
+    }
+    upstream xray_xhttp {
+        server [::1]:6444;
+    }
+    upstream xray_reality_aliyun {
+        server [::1]:6445;
+    }
+    upstream sb_reality {
+        server [::1]:5443;
+    }
+    upstream my_nginx {
+        server [::1]:4443;
+    }
+    log_format basic '\$remote_addr [\$time_local] '
+        '\$protocol \$status \$bytes_sent \$bytes_received '
+        '\$session_time "\$upstream_addr" '
+        '"\$upstream_bytes_sent" "\$upstream_bytes_received" "\$upstream_connect_time"';
+    server {
+        listen 443 reuseport;
+        listen [::]:443 reuseport;
+        proxy_pass      \$backend;
+        ssl_preread     on;
+        #proxy_protocol  on;
+        proxy_connect_timeout 5s;
+        proxy_timeout 10m;
+        access_log /var/log/nginx/stream_access.log basic;
+        error_log /var/log/nginx/stream_error.log;
+    }
+}
+EOF
+        # 使用 sed 在 'http {' 这一行之前插入标记，然后读入文件
+        sudo sed -i '/http {/i ###STREAM_BLOCK_INSERTION###' "$nginx_conf"
+        sudo sed -i '/###STREAM_BLOCK_INSERTION###/r /tmp/nginx_stream.tmp' "$nginx_conf"
+        sudo sed -i '/###STREAM_BLOCK_INSERTION###/d' "$nginx_conf"
+        rm -f /tmp/nginx_stream.tmp
+        echo "✅ Stream 配置已插入到 events 和 http 之间。"
+    fi
+
+    # 3. 修改 default 站点配置
+    local default_site="/etc/nginx/sites-available/default"
+    echo "正在更新站点配置 $default_site ..."
+    
+    # 备份 default 文件
+    cp "$default_site" "$cert_dir/default_site.bak_$(date +%s)"
+
+    # 写入新配置 (注意：$domain 是 Shell 变量，\$host 是 Nginx 变量)
+    # 这里将 [sub].[domain] 替换为 www.$domain
+    sudo tee "$default_site" > /dev/null <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 4443 ssl default_server;
+    listen [::]:4443 ssl default_server;
+    http2 on; # for nginx version >= 1.25.1
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_reject_handshake on; # must match server name, reject direct ip request
+}
+server {
+    listen 4443 ssl;
+    listen [::]:4443 ssl;
+    http2 on;
+    # change to SNI name in xray
+    server_name www.$domain $domain; # TODO: change www
+
+    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    # openssl x509 -in /path/to/your/certificate.crt -noout -text | grep 'Public Key Algorithm'
+    # Public Key Algorithm: id-ecPublicKey   --- ECDSA
+    # change \`ECDSA\` to \`RSA\` in case of RSA certificate
+    ssl_ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        #proxy_set_header Host         \$host;
+        #proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        root /var/www/html;
+        index index.html index.htm;
+    }
+}
+EOF
+    echo "✅ 站点配置文件已更新。"
+
+    # 4. 循环检查配置并重启
+    echo "---"
+    echo "开始检查 Nginx 配置..."
+    
+    while true; do
+        if sudo nginx -t; then
+            echo "✅ Nginx 配置测试通过！"
+            echo "正在重新启动 Nginx..."
+            sudo systemctl restart nginx
+            if [ $? -eq 0 ]; then
+                echo "✅ Nginx 重启成功！"
+                break
+            else
+                echo "❌ Nginx 重启失败，请检查 systemctl status nginx。"
+                read -p "按 Enter 键返回菜单..."
+                break
+            fi
+        else
+            echo ""
+            echo "❌ Nginx 配置检测失败！"
+            read -p "是否现在手动编辑配置文件以修复错误？(y/n): " edit_choice
+            if [[ "$edit_choice" =~ ^[Yy]$ ]]; then
+                echo "请选择要编辑的文件:"
+                echo "1) nginx.conf (Stream配置)"
+                echo "2) sites-available/default (站点配置)"
+                read -p "输入数字 (1 或 2): " file_choice
+                if [ "$file_choice" == "1" ]; then
+                    sudo vim "$nginx_conf"
+                elif [ "$file_choice" == "2" ]; then
+                    sudo vim "$default_site"
+                else
+                    echo "无效选择。"
+                fi
+                echo "编辑完成后，将再次进行测试..."
+            else
+                echo "您可以稍后手动修复。按 Enter 键返回..."
+                break
+            fi
+        fi
+    done
+}
+
+# ---
+# 主菜单循环
+# ---
+main() {
+    while true; do
+        echo "---"
+        echo "请选择要执行的操作:"
+        echo "1. 安装必要的软件包并设置系统环境"
+        echo "2. 申请或更新证书"
+        echo "3. 添加 IPv4 支持 (WARP)"
+        echo "4. 安装 Xray"
+        echo "5. 更新 Nginx 配置 (Stream & SNI 分流)"
+        echo "q. 退出"
+        echo "---"
+    
+        read -p "请输入选项: " choice
+    
+        case "$choice" in
+            1)
+                install_pkgs_and_setup_env
+                ;;
+            2)
+                apply_or_renew_cert
+                ;;
+            3)
+                add_ipv4_by_warp
+                ;;
+            4)
+                install_xray
+                ;;
+            5)
+                update_nginx_config
+                ;;
+            q|Q)
+                echo "---"
+                echo "退出脚本。"
+                echo "---"
+                break
+                ;;
+            *)
+                echo "无效的选项，请重新输入。"
+                ;;
+        esac
+    
+        echo ""
+    done
+}
+
+main
+
+#######
+# sudo systemctl edit xray.service
+# 
+## 这个命令会：
+## 在 /etc/systemd/system/ 下创建一个名为 xray.service.d/ 的目录。
+## 在目录中创建一个名为 override.conf 的空文件，并用编辑器打开它。
+#
+# [Service]
+# ExecStart=
+# ExecStart=/usr/local/bin/xray run -config /path/to/my/custom/config.jsonc
+#
+# sudo systemctl daemon-reload
+# sudo systemctl restart xray
+#######
+# cat file.txt | qrencode -t ansiutf8
+# qrencode -t utf8 "https://www.google.com"
+#######
+# timedatectl
+# timedatectl list-timezones | grep Asia/
+# timedatectl list-timezones | grep Shanghai
+# sudo timedatectl set-timezone Asia/Shanghai
+# timedatectl
+#
+# sudo dpkg-reconfigure tzdata
+# date
+#######
