@@ -1,5 +1,29 @@
 #!/bin/bash
 
+# ---
+# 0. 系统检查：仅支持 Debian / Ubuntu
+# ---
+check_system() {
+    if [ ! -f /etc/os-release ]; then
+        echo "❌ 错误：无法检测操作系统（未找到 /etc/os-release）。"
+        echo "本脚本仅支持 Debian 或 Ubuntu 系统。"
+        exit 1
+    fi
+
+    . /etc/os-release
+    
+    case "$ID" in
+        debian|ubuntu)
+            echo "✅ 检测到系统: $PRETTY_NAME，继续执行。"
+            ;;
+        *)
+            echo "❌ 错误：不支持的操作系统: $PRETTY_NAME ($ID)"
+            echo "本脚本仅支持 Debian 或 Ubuntu 系统，请在支持的系统上运行。"
+            exit 1
+            ;;
+    esac
+}
+
 fq_dir="$HOME/gfw"
 packages="dnsutils wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full tmux qrencode"
 cert_dir="$fq_dir/cf_cert"
@@ -8,12 +32,84 @@ domain_file="$cert_dir/domain.txt"
 # ---
 # 1. 安装必要的软件包
 # ---
+
+# 检查并安装满足版本要求的 nginx (>= 1.25.1)
+ensure_nginx_version() {
+    local required_major=1
+    local required_minor=25
+    local required_patch=1
+
+    echo "---"
+    echo "正在检查 apt 源中的 nginx 版本..."
+
+    # 获取 apt 源中 nginx-full 的候选版本号
+    local apt_version=""
+    apt_version=$(apt-cache policy nginx-full 2>/dev/null | grep 'Candidate:' | awk '{print $2}')
+
+    if [ -n "$apt_version" ]; then
+        echo "apt 源中 nginx-full 候选版本: $apt_version"
+        # 提取主版本号 (例如从 "1.24.0-2" 中提取 "1.24.0")
+        local ver_nums
+        ver_nums=$(echo "$apt_version" | grep -oP '^\d+\.\d+\.\d+')
+        local major minor patch
+        major=$(echo "$ver_nums" | cut -d. -f1)
+        minor=$(echo "$ver_nums" | cut -d. -f2)
+        patch=$(echo "$ver_nums" | cut -d. -f3)
+
+        # 比较版本号
+        if [ "$major" -gt "$required_major" ] 2>/dev/null || \
+           { [ "$major" -eq "$required_major" ] && [ "$minor" -gt "$required_minor" ]; } 2>/dev/null || \
+           { [ "$major" -eq "$required_major" ] && [ "$minor" -eq "$required_minor" ] && [ "$patch" -ge "$required_patch" ]; } 2>/dev/null; then
+            echo "✅ apt 源中的 nginx 版本 ($ver_nums) >= 1.25.1，将使用系统源安装。"
+            return 0
+        fi
+    fi
+
+    echo "⚠️ apt 源中的 nginx 版本不满足要求 (需要 >= 1.25.1)。"
+    echo "正在添加 nginx 官方仓库..."
+
+    # 安装必要的依赖
+    sudo apt install -y curl gnupg2 ca-certificates lsb-release
+
+    # 导入 nginx 官方签名密钥
+    curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg --yes
+
+    # 添加 nginx 官方 mainline 仓库 (mainline 分支版本号更高，确保 >= 1.25.1)
+    . /etc/os-release
+    echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/$ID $(lsb_release -cs) nginx" | \
+        sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+
+    # 设置 nginx 官方仓库优先级高于系统源
+    echo -e "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n" | \
+        sudo tee /etc/apt/preferences.d/99nginx > /dev/null
+
+    sudo apt update
+    echo "✅ nginx 官方仓库已添加，将安装最新 mainline 版本。"
+}
+
 install_pkgs_and_setup_env() {
     echo "---"
     echo "开始安装必要的软件包: $packages"
     echo "---"
     sudo apt update
     sudo apt install -y $packages
+
+    # 检查 nginx 版本是否满足要求
+    local nginx_ver=""
+    nginx_ver=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+    local n_major n_minor n_patch
+    n_major=$(echo "$nginx_ver" | cut -d. -f1)
+    n_minor=$(echo "$nginx_ver" | cut -d. -f2)
+    n_patch=$(echo "$nginx_ver" | cut -d. -f3)
+    if ! { [ "$n_major" -gt 1 ] || { [ "$n_major" -eq 1 ] && [ "$n_minor" -gt 25 ]; } || \
+           { [ "$n_major" -eq 1 ] && [ "$n_minor" -eq 25 ] && [ "$n_patch" -ge 1 ]; }; } 2>/dev/null; then
+        echo "⚠️ 已安装的 nginx 版本 ($nginx_ver) < 1.25.1，需要从 nginx 官方仓库重新安装..."
+        ensure_nginx_version
+        # 将 nginx-full 替换为官方仓库的 nginx
+        sudo apt remove -y nginx-full nginx-common 2>/dev/null
+        sudo apt install -y nginx
+        echo "✅ 已从 nginx 官方仓库安装 nginx: $(nginx -v 2>&1)"
+    fi
 
     if [ $? -eq 0 ]; then
         echo "✅ 所有软件包已成功安装！"
@@ -29,7 +125,7 @@ install_pkgs_and_setup_env() {
         echo "✅ .bashrc 环境似乎已配置过，跳过写入。"
     else
         echo "正在配置 .bashrc..."
-        cat <<EOF >> $HOME/.bashrc
+        cat <<'EOF' >> $HOME/.bashrc
 alias ll='ls -l'
 alias t='tmux a -t 0'
 alias tailf='tail -f'
@@ -162,7 +258,7 @@ apply_or_renew_cert() {
         echo "从文件 $domain_file 中读取到域名：$domain"
     fi
     if [ -z "$domain" ]; then
-        read -p "请输入您的域名 (例如：example.com): " domain
+        read -p "请输入您的顶级域名（注意：请输入顶级域名而非子域名，例如：example.com 而不是 www.example.com）: " domain
         if [ -z "$domain" ]; then
             echo "❌ 错误：域名不能为空。"
             return 1
@@ -508,21 +604,50 @@ install_xray() {
 }
 EOF
 
-    echo "config.jsonc 已创建。您可以修改此文件以更改目标网站或配置。"
-    read -p "修改完毕请按 Enter 继续..."
+    echo "config.jsonc 已创建。"
+    read -p "是否要打开 config.jsonc 进行编辑？(y/n): " edit_config
+    if [[ "$edit_config" =~ ^[Yy]$ ]]; then
+        vim config.jsonc
+        echo "✅ 编辑完成，继续后续流程。"
+    fi
 
     local sys_conf="/usr/local/etc/xray/config.json"
     echo "---"
     echo "正在将配置保存到 $sys_conf..."
-    if ! command -v jq &> /dev/null; then
-        echo "⚠️ 警告: 未找到 jq 命令，无法格式化 JSON。将直接保存配置。"
-        sed -e 's/\/\/.*//' config.jsonc | sudo tee "$sys_conf" > /dev/null
-    else
-        sed -e 's/\/\/.*//' config.jsonc | jq . | sudo tee "$sys_conf" > /dev/null
-    fi
-    
-    ln -sf "$sys_conf" config.json
-    read -p "请检查 config.json，确认后按 Enter 启动 Xray 服务..."
+
+    # 循环验证配置文件，直到通过为止
+    while true; do
+        # 先去除注释并生成 JSON
+        if ! command -v jq &> /dev/null; then
+            echo "⚠️ 警告: 未找到 jq 命令，无法格式化 JSON。将直接保存配置。"
+            sed -e 's/\/\/.*//' config.jsonc | sudo tee "$sys_conf" > /dev/null
+        else
+            sed -e 's/\/\/.*//' config.jsonc | jq . | sudo tee "$sys_conf" > /dev/null
+        fi
+
+        ln -sf "$sys_conf" config.json
+
+        echo "正在检查 Xray 配置文件..."
+        local test_output
+        test_output=$(xray test -c "$sys_conf" 2>&1)
+        if [ $? -eq 0 ]; then
+            echo "✅ Xray 配置文件检查通过！"
+            break
+        else
+            echo ""
+            echo "❌ Xray 配置文件检查失败！错误信息如下："
+            echo "---"
+            echo "$test_output"
+            echo "---"
+            read -p "是否打开 config.jsonc 继续编辑以修复错误？(y/n): " fix_choice
+            if [[ "$fix_choice" =~ ^[Yy]$ ]]; then
+                vim config.jsonc
+            else
+                echo "⚠️ 配置文件存在错误，后续流程可能出问题。继续执行..."
+                break
+            fi
+        fi
+    done
 
     # 从最终的系统配置文件中提取 target
     local extracted_target=""
@@ -599,6 +724,47 @@ EOF
     else
         echo "⚠️ 未找到 qrencode 命令，跳过二维码生成。"
     fi
+
+    # --- 生成 VLESS 链接二维码 (用于 Shadowrocket 导入) ---
+    echo "---"
+    echo "正在生成 VLESS 链接二维码 (可用于 Shadowrocket 导入)..."
+    if command -v qrencode &> /dev/null; then
+        # 从xray.key读取必要参数
+        local PublicKey
+        PublicKey=$(grep "^PublicKey:" "$xray_key_file" | awk '{print $2}')
+        local target
+        target=$(grep "^target:" "$xray_key_file" | cut -d: -f2)
+        local sni="${target:-www.microsoft.com}"
+
+        # 构建 VLESS 链接
+        # 格式: vless://UUID@地址:端口?参数#备注名
+        local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${PublicKey}&sid=${sid1}&type=tcp&headerType=none"
+
+        if [ -n "$ip_v4" ]; then
+            local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
+            echo ""
+            echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
+            echo "$vless_v4" | qrencode -t ansiutf8
+            echo ""
+            echo "链接: $vless_v4"
+        else
+            echo "⚠️ 无 IPv4 地址，跳过 IPv4 VLESS 二维码。"
+        fi
+
+        echo ""
+
+        if [ -n "$ip_v6" ]; then
+            local vless_v6="vless://${uuid1}@[${ip_v6}]:443?${vless_params}#VLESS-IPv6"
+            echo "📱 IPv6 VLESS 链接二维码 (Shadowrocket):"
+            echo "$vless_v6" | qrencode -t ansiutf8
+            echo ""
+            echo "链接: $vless_v6"
+        else
+            echo "⚠️ 无 IPv6 地址，跳过 IPv6 VLESS 二维码。"
+        fi
+    else
+        echo "⚠️ 未找到 qrencode 命令，跳过 VLESS 二维码生成。"
+    fi
 }
 
 # ---
@@ -621,7 +787,7 @@ update_nginx_config() {
             return 1
         fi
     fi
-    if [ ! -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+    if ! sudo test -f "/etc/letsencrypt/live/$domain/fullchain.pem"; then
         echo "❌ 错误：未找到域名 $domain 的证书文件。"
         echo "请先执行步骤 2 申请证书，或检查域名是否一致。"
         return 1
@@ -833,6 +999,7 @@ main() {
     done
 }
 
+check_system
 main
 
 #######
