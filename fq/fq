@@ -11,7 +11,7 @@ check_system() {
     fi
 
     . /etc/os-release
-    
+
     case "$ID" in
         debian|ubuntu)
             echo "✅ 检测到系统: $PRETTY_NAME，继续执行。"
@@ -170,7 +170,7 @@ set-option -g display-time 1000		# msg display time, 1000 ms
 
 set-option -g prefix C-j
 unbind-key C-b
-bind-key C-j send-prefix 
+bind-key C-j send-prefix
 
 bind r source-file ~/.tmux.conf \; display "Reloaded!"	    # reload config file
 
@@ -234,7 +234,7 @@ apply_or_renew_cert() {
     echo "请登录 Cloudflare，前往“API 令牌”页面，创建一个 DNS 编辑令牌。"
     echo "详细步骤请参考：Login Cloudflare, Go to \"API Tokens\", create dns edit token, then copy."
     echo "---"
-    
+
     mkdir -p "$cert_dir"
     cd "$cert_dir" || { echo "无法进入目录 $cert_dir，退出。"; return 1; }
 
@@ -292,7 +292,7 @@ apply_or_renew_cert() {
 # ---
 add_ipv4_by_warp() {
     local warp_dir="$fq_dir/cf_warp"
-    
+
     echo "---"
     echo "正在检查系统IPv4连接..."
     echo "---"
@@ -312,7 +312,7 @@ add_ipv4_by_warp() {
     else
         echo "⚠️ 未检测到有效的 IPv4 出口，准备配置 WARP 接管 IPv4 流量。"
     fi
-    
+
     mkdir -p "$warp_dir"
     cd "$warp_dir" || { echo "无法进入目录 $warp_dir，退出。"; return 1; }
 
@@ -340,12 +340,12 @@ add_ipv4_by_warp() {
             break
         fi
     done
-    
+
     local bin_dir="$HOME/bin"
     mkdir -p "$bin_dir"
     ln -sf "$warp_dir/$wgcf_file" "$bin_dir/wgcf"
     echo "✅ 已在 ~/bin 目录创建 wgcf 软链接。"
-    
+
     if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
         echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
         echo "⚠️ ~/bin 已添加到 PATH，请重新启动终端或执行 'source ~/.bashrc' 使其生效。"
@@ -355,7 +355,7 @@ add_ipv4_by_warp() {
     echo "---"
     echo "正在注册 WARP 账户..."
     $bin_dir/wgcf register --accept-tos
-    
+
     echo "正在生成 WireGuard 配置文件..."
     $bin_dir/wgcf generate
 
@@ -433,7 +433,7 @@ add_ipv4_by_warp() {
 # ---
 install_xray() {
     local xray_dir="$fq_dir/xray"
-    
+
     echo "---"
     echo "正在下载并安装 Xray..."
     #sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
@@ -474,7 +474,7 @@ install_xray() {
             return 1
         fi
         echo "✅ 已生成 Privatekey。"
-        
+
         uuid1=$(xray uuid)
         uuid2=$(xray uuid)
         sid1=$(openssl rand -hex 4)
@@ -772,10 +772,10 @@ EOF
 # ---
 update_nginx_config() {
     local domain=""
-    
+
     echo "---"
     echo "正在准备更新 Nginx 配置..."
-    
+
     # 1. 获取域名
     if [ -f "$domain_file" ]; then
         domain=$(head -n 1 "$domain_file")
@@ -795,7 +795,7 @@ update_nginx_config() {
 
     # 2. 修改 nginx.conf (添加 Stream 模块)
     local nginx_conf="/etc/nginx/nginx.conf"
-    
+
     # 备份原始配置
     if [ ! -f "${nginx_conf}.bak_script" ]; then
         sudo cp "$nginx_conf" "${nginx_conf}.bak_script"
@@ -807,7 +807,7 @@ update_nginx_config() {
         echo "⚠️ 检测到 nginx.conf 中似乎已包含 stream 配置，跳过 stream 块写入。"
     else
         echo "正在向 nginx.conf 写入 stream 配置..."
-        
+
         # 创建临时文件存放 stream 配置内容 (注意：这里 \$ 转义了 Nginx 变量)
         cat <<EOF > /tmp/nginx_stream.tmp
 stream {
@@ -861,7 +861,7 @@ EOF
     # 3. 修改 default 站点配置
     local default_site="/etc/nginx/sites-available/default"
     echo "正在更新站点配置 $default_site ..."
-    
+
     # 备份 default 文件
     cp "$default_site" "$cert_dir/default_site.bak_$(date +%s)"
 
@@ -912,7 +912,7 @@ EOF
     # 4. 循环检查配置并重启
     echo "---"
     echo "开始检查 Nginx 配置..."
-    
+
     while true; do
         if sudo nginx -t; then
             echo "✅ Nginx 配置测试通过！"
@@ -965,9 +965,9 @@ main() {
         echo "5. 更新 Nginx 配置 (Stream & SNI 分流)"
         echo "q. 退出"
         echo "---"
-    
+
         read -p "请输入选项: " choice
-    
+
         case "$choice" in
             1)
                 install_pkgs_and_setup_env
@@ -994,7 +994,7 @@ main() {
                 echo "无效的选项，请重新输入。"
                 ;;
         esac
-    
+
         echo ""
     done
 }
@@ -1004,7 +1004,7 @@ main
 
 #######
 # sudo systemctl edit xray.service
-# 
+#
 ## 这个命令会：
 ## 在 /etc/systemd/system/ 下创建一个名为 xray.service.d/ 的目录。
 ## 在目录中创建一个名为 override.conf 的空文件，并用编辑器打开它。
