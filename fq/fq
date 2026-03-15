@@ -546,6 +546,15 @@ install_xray() {
             "c.s-microsoft.com",
             "privacy.microsoft.com"
           ],
+          //"target": "www.oracle.com:443",
+          //"serverNames": [
+          //  "www.oracle.com",
+          //  "linux.oracle.com",
+          //  "community.oracle.com",
+          //  "fusioncrm.oracle.com",
+          //  "search.oracle.com",
+          //  "my.oracle.com"
+          //],
           //"target": "www.lovelive-anime.jp:443",
           //"serverNames": [
           //  "lovelive-anime.jp",
