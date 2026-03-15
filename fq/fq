@@ -84,6 +84,8 @@ ensure_nginx_version() {
         sudo tee /etc/apt/preferences.d/99nginx > /dev/null
 
     sudo apt update
+    # 官方仓库提供的包名是 nginx 而非 nginx-full，替换 packages 变量
+    packages=$(echo "$packages" | sed 's/nginx-full/nginx/')
     echo "✅ nginx 官方仓库已添加，将安装最新 mainline 版本。"
 }
 
@@ -92,6 +94,10 @@ install_pkgs_and_setup_env() {
     echo "开始安装必要的软件包: $packages"
     echo "---"
     sudo apt update
+
+    # 先检查 apt 源中的 nginx 版本，如不满足要求则添加官方源
+    ensure_nginx_version
+
     sudo apt install -y $packages
 
     if [ $? -eq 0 ]; then
@@ -101,21 +107,20 @@ install_pkgs_and_setup_env() {
         return 1
     fi
 
-    # 检查 nginx 版本是否满足要求 (>= 1.25.1)
+    # 安装后确认 nginx 版本是否满足要求 (>= 1.25.1)
     local nginx_ver=""
     nginx_ver=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+    echo "已安装的 nginx 版本: $nginx_ver"
     local n_major n_minor n_patch
     n_major=$(echo "$nginx_ver" | cut -d. -f1)
     n_minor=$(echo "$nginx_ver" | cut -d. -f2)
     n_patch=$(echo "$nginx_ver" | cut -d. -f3)
     if ! { [ "$n_major" -gt 1 ] || { [ "$n_major" -eq 1 ] && [ "$n_minor" -gt 25 ]; } || \
            { [ "$n_major" -eq 1 ] && [ "$n_minor" -eq 25 ] && [ "$n_patch" -ge 1 ]; }; } 2>/dev/null; then
-        echo "⚠️ 已安装的 nginx 版本 ($nginx_ver) < 1.25.1，需要从 nginx 官方仓库重新安装..."
-        ensure_nginx_version
-        sudo apt remove -y nginx-full nginx-common 2>/dev/null
-        sudo apt install -y nginx
-        echo "✅ 已从 nginx 官方仓库安装 nginx: $(nginx -v 2>&1)"
+        echo "❌ 安装后 nginx 版本 ($nginx_ver) 仍不满足要求 (>= 1.25.1)，请手动检查。"
+        return 1
     fi
+    echo "✅ nginx 版本检查通过: $nginx_ver >= 1.25.1"
 
     echo "---"
     echo "设置系统环境"
