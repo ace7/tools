@@ -94,7 +94,14 @@ install_pkgs_and_setup_env() {
     sudo apt update
     sudo apt install -y $packages
 
-    # 检查 nginx 版本是否满足要求
+    if [ $? -eq 0 ]; then
+        echo "✅ 所有软件包已成功安装！"
+    else
+        echo "❌ 安装过程中出现错误，请检查上面的输出。"
+        return 1
+    fi
+
+    # 检查 nginx 版本是否满足要求 (>= 1.25.1)
     local nginx_ver=""
     nginx_ver=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
     local n_major n_minor n_patch
@@ -105,17 +112,9 @@ install_pkgs_and_setup_env() {
            { [ "$n_major" -eq 1 ] && [ "$n_minor" -eq 25 ] && [ "$n_patch" -ge 1 ]; }; } 2>/dev/null; then
         echo "⚠️ 已安装的 nginx 版本 ($nginx_ver) < 1.25.1，需要从 nginx 官方仓库重新安装..."
         ensure_nginx_version
-        # 将 nginx-full 替换为官方仓库的 nginx
         sudo apt remove -y nginx-full nginx-common 2>/dev/null
         sudo apt install -y nginx
         echo "✅ 已从 nginx 官方仓库安装 nginx: $(nginx -v 2>&1)"
-    fi
-
-    if [ $? -eq 0 ]; then
-        echo "✅ 所有软件包已成功安装！"
-    else
-        echo "❌ 安装过程中出现错误，请检查上面的输出。"
-        return 1
     fi
 
     echo "---"
@@ -493,6 +492,42 @@ install_xray() {
         echo "✅ 配置已保存。"
     fi
 
+    # 询问用户选择 REALITY 目标网站
+    echo "---"
+    echo "请选择 REALITY 目标网站（建议根据服务器所在地区选择）："
+    echo "1. Microsoft  (www.microsoft.com) — 推荐用于美国 IP"
+    echo "2. Oracle     (www.oracle.com)    — 推荐用于美国 IP"
+    echo "3. LoveLive   (www.lovelive-anime.jp) — 推荐用于日本 IP"
+    read -p "请输入选项 (默认 1): " target_choice
+    local reality_target reality_server_names
+    case "$target_choice" in
+        2)
+            reality_target="www.oracle.com:443"
+            reality_server_names='            "www.oracle.com",
+            "linux.oracle.com",
+            "community.oracle.com",
+            "fusioncrm.oracle.com",
+            "search.oracle.com",
+            "my.oracle.com"'
+            ;;
+        3)
+            reality_target="www.lovelive-anime.jp:443"
+            reality_server_names='            "lovelive-anime.jp",
+            "www.lovelive-anime.jp"'
+            ;;
+        *)
+            reality_target="www.microsoft.com:443"
+            reality_server_names='            "www.microsoft.com",
+            "wwwqa.microsoft.com",
+            "staticview.microsoft.com",
+            "i.s-microsoft.com",
+            "microsoft.com",
+            "c.s-microsoft.com",
+            "privacy.microsoft.com"'
+            ;;
+    esac
+    echo "✅ 已选择目标: $reality_target"
+
     echo "---"
     echo "正在创建 config.jsonc 文件..."
     cat << EOF > config.jsonc
@@ -532,34 +567,10 @@ install_xray() {
         "realitySettings": {
           "show": false,
           "xver": 0,
-          // 目标网站最低标准：国外网站，支持 TLSv1.3 与 H2，域名非跳转用（主域名可能被用于跳转到 www）。
-          // 详见 https://github.com/XTLS/REALITY
-          "target": "www.microsoft.com:443",
+          "target": "$reality_target",
           "serverNames": [
-            // 客户端可用的 serverName 列表，暂不支持 * 通配符
-            // 执行 xray tls ping 目标网站网址，填 "Allowed domains" 的值
-            "www.microsoft.com",
-            "wwwqa.microsoft.com",
-            "staticview.microsoft.com",
-            "i.s-microsoft.com",
-            "microsoft.com",
-            "c.s-microsoft.com",
-            "privacy.microsoft.com"
+$reality_server_names
           ],
-          //"target": "www.oracle.com:443",
-          //"serverNames": [
-          //  "www.oracle.com",
-          //  "linux.oracle.com",
-          //  "community.oracle.com",
-          //  "fusioncrm.oracle.com",
-          //  "search.oracle.com",
-          //  "my.oracle.com"
-          //],
-          //"target": "www.lovelive-anime.jp:443",
-          //"serverNames": [
-          //  "lovelive-anime.jp",
-          //  "www.lovelive-anime.jp"
-          //],
           "privateKey": "$PrivateKey", // xray x25519
           "minClientVer": "",
           "maxClientVer": "",
@@ -817,14 +828,29 @@ update_nginx_config() {
     else
         echo "正在向 nginx.conf 写入 stream 配置..."
 
+        # 从 sys_conf 的 serverNames 动态生成 nginx SNI 转发规则（取前3个）
+        local sys_conf_path="/usr/local/etc/xray/config.json"
+        local nginx_sni_map_entries=""
+        if command -v jq &> /dev/null && [ -f "$sys_conf_path" ]; then
+            local sni_list
+            sni_list=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[:3][]' "$sys_conf_path" 2>/dev/null)
+            while IFS= read -r sni_entry; do
+                [ -n "$sni_entry" ] && nginx_sni_map_entries+="        ${sni_entry}   xray_reality;\n"
+            done <<< "$sni_list"
+        fi
+        # 兜底：如果读取失败，使用默认条目
+        if [ -z "$nginx_sni_map_entries" ]; then
+            nginx_sni_map_entries="        www.microsoft.com   xray_reality;"
+            echo "⚠️ 未能从 config.json 读取 serverNames，使用默认 SNI 条目。"
+        fi
+        # 去除末尾多余的 \n，并展开转义
+        nginx_sni_map_entries=$(printf "%b" "$nginx_sni_map_entries" | sed '${/^$/d}')
+
         # 创建临时文件存放 stream 配置内容 (注意：这里 \$ 转义了 Nginx 变量)
         cat <<EOF > /tmp/nginx_stream.tmp
 stream {
     map \$ssl_preread_server_name \$backend {
-        www.microsoft.com   xray_reality;
-        wwwqa.microsoft.com     xray_reality_aliyun;
-        www.lovelive-anime.jp    xray_xhttp;
-        privacy.microsoft.com   sb_reality;
+$nginx_sni_map_entries
         default         my_nginx;
     }
     upstream xray_reality {
@@ -1011,6 +1037,11 @@ main() {
 check_system
 main
 
+#######
+# 目标网站最低标准：国外网站，支持 TLSv1.3 与 H2，域名非跳转用（主域名可能被用于跳转到 www）
+# 详见 https://github.com/XTLS/REALITY
+# xray tls ping www.microsoft.com
+# check "Allowed domains"
 #######
 # sudo systemctl edit xray.service
 #
