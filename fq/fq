@@ -265,7 +265,17 @@ apply_or_renew_cert() {
     else
         if [ -f "$domain_file" ]; then
             subdomain=$(head -n 1 "$domain_file")
-            echo "从文件 $domain_file 中读取到子域名：$subdomain"
+            echo "---"
+            read -p "从文件读取到名称: $subdomain, 是否正确且为子域名? [Y/n]: " sub_confirm
+            if [[ "$sub_confirm" =~ ^[Nn]$ ]]; then
+                read -p "请输入正确的子域名（例如 sub.example.com）: " subdomain
+                if [ -n "$subdomain" ]; then
+                    echo "$subdomain" > "$domain_file"
+                    echo "✅ 子域名已更新并保存。"
+                fi
+            else
+                echo "✅ 继续使用: $subdomain"
+            fi
         fi
         if [ -z "$subdomain" ]; then
             read -p "请输入您的子域名（例如 sub.example.com）: " subdomain
@@ -1025,66 +1035,109 @@ EOF
 }
 
 # ---
+# 6. 交互式菜单 (非第一次运行)
+# ---
+interactive_menu() {
+    while true; do
+        echo "---"
+        echo "请选择要执行的操作:"
+        echo "1. 安装必要的软件包并设置系统环境"
+        echo "2. 申请或更新证书"
+        echo "3. 添加 IPv4 支持 (WARP)"
+        echo "4. 安装/更新 Xray"
+        echo "5. 更新 Xray GeoData"
+        echo "6. 更新 Nginx 配置 (Stream & SNI 分流)"
+        echo "q. 退出"
+        echo "---"
+
+        read -p "请输入选项: " choice
+
+        case "$choice" in
+            1) install_pkgs_and_setup_env ;;
+            2) apply_or_renew_cert ;;
+            3) add_ipv4_by_warp ;;
+            4) install_xray ;;
+            5)
+                echo "正在更新 Xray GeoData..."
+                sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
+                ;;
+            6) update_nginx_config ;;
+            q|Q) break ;;
+            *) echo "无效的选项，请重新输入。" ;;
+        esac
+        echo ""
+    done
+}
+
+# ---
 # 主流程
 # ---
 main() {
-    install_pkgs_and_setup_env || return 1
-
     echo "---"
-    echo "检测IPv4..."
-    ORIGINAL_HAS_IPV4=false
-    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
-       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
-        echo "✅ 检测到系统已有 IPv4 出口。"
-        ORIGINAL_HAS_IPV4=true
-    else
-        read -p "未检测到有效的 IPv4 出口，是否要给系统增加 IPv4 支持 (WARP)? [Y/n]: " add_warp
-        if [[ "$add_warp" =~ ^[Yy]$ || -z "$add_warp" ]]; then
-            add_ipv4_by_warp || return 1
-        fi
-    fi
-
+    echo "欢迎使用 FQ 脚本"
     echo "---"
-    read -p "是否有自有域名？[Y/n]: " has_domain
-    if [[ "$has_domain" =~ ^[Yy]$ || -z "$has_domain" ]]; then
-        echo "👉 将通过 nginx(443) -> xray(6443) 的方式安装"
+    read -p "是否是第一次执行流程（自动化从0到1安装）？[Y/n]: " is_first
+    if [[ "$is_first" =~ ^[Yy]$ || -z "$is_first" ]]; then
+        install_pkgs_and_setup_env || return 1
 
-        while true; do
-            read -p "请输入子域名（例如 sub.example.com）: " full_domain
-            if [ -n "$full_domain" ]; then break; fi
-        done
-
-        # 提取 domain 和 subdomain
-        domain=$(echo "$full_domain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
-        subdomain=$full_domain
-
-        read -p "该域名是否通过 Cloudflare 管理？[Y/n]: " is_cf
-        if [[ "$is_cf" =~ ^[Yy]$ || -z "$is_cf" ]]; then
-            echo "---"
-            echo "请获取 Cloudflare DNS API token，并配置 $subdomain 的 DNS 指向本机 IP。"
-            # 显示本机 IP
-            local ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
-            local ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
-            echo "本机 IPv4: ${ip_v4:-无}"
-            echo "本机 IPv6: ${ip_v6:-无}"
-            echo "---"
-
-            apply_or_renew_cert "$subdomain" || return 1
+        echo "---"
+        echo "检测IPv4..."
+        ORIGINAL_HAS_IPV4=false
+        if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
+           curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+            echo "✅ 检测到系统已有 IPv4 出口。"
+            ORIGINAL_HAS_IPV4=true
         else
-            echo "---"
-            echo "将使用 certbot 帮您申请 *.$domain 的证书"
-            sudo certbot certonly --manual --preferred-challenges dns --agree-tos --no-eff-email -d "*.$domain" -d "$domain" || return 1
-            echo "✅ 证书申请完成！"
+            read -p "未检测到有效的 IPv4 出口，是否要给系统增加 IPv4 支持 (WARP)? [Y/n]: " add_warp
+            if [[ "$add_warp" =~ ^[Yy]$ || -z "$add_warp" ]]; then
+                add_ipv4_by_warp || return 1
+            fi
         fi
 
-        update_nginx_config "$domain" "$subdomain" || return 1
-        install_xray 6443 || return 1
+        echo "---"
+        read -p "是否有自有域名？[Y/n]: " has_domain
+        if [[ "$has_domain" =~ ^[Yy]$ || -z "$has_domain" ]]; then
+            echo "👉 将通过 nginx(443) -> xray(6443) 的方式安装"
+
+            while true; do
+                read -p "请输入子域名（例如 sub.example.com）: " full_domain
+                if [ -n "$full_domain" ]; then break; fi
+            done
+
+            # 提取 domain 和 subdomain
+            domain=$(echo "$full_domain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+            subdomain=$full_domain
+
+            read -p "该域名是否通过 Cloudflare 管理？[Y/n]: " is_cf
+            if [[ "$is_cf" =~ ^[Yy]$ || -z "$is_cf" ]]; then
+                echo "---"
+                echo "请获取 Cloudflare DNS API token，并配置 $subdomain 的 DNS 指向本机 IP。"
+                # 显示本机 IP
+                local ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+                local ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+                echo "本机 IPv4: ${ip_v4:-无}"
+                echo "本机 IPv6: ${ip_v6:-无}"
+                echo "---"
+
+                apply_or_renew_cert "$subdomain" || return 1
+            else
+                echo "---"
+                echo "将使用 certbot 帮您申请 *.$domain 的证书"
+                sudo certbot certonly --manual --preferred-challenges dns --agree-tos --no-eff-email -d "*.$domain" -d "$domain" || return 1
+                echo "✅ 证书申请完成！"
+            fi
+
+            update_nginx_config "$domain" "$subdomain" || return 1
+            install_xray 6443 || return 1
+        else
+            echo "👉 将通过 xray(443) 的方式安装"
+            install_xray 443 || return 1
+        fi
+        echo "---"
+        echo "✅ 全流程自动安装完毕。"
     else
-        echo "👉 将通过 xray(443) 的方式安装"
-        install_xray 443 || return 1
+        interactive_menu
     fi
-    echo "---"
-    echo "✅ 执行完毕。"
 }
 
 check_system
