@@ -229,7 +229,9 @@ EOF
 # 2. 申请或更新证书
 # ---
 apply_or_renew_cert() {
+    local target_subdomain="$1"
     local cf_ini="$cert_dir/cf.ini"
+    local subdomain=""
     local domain=""
     local cf_token=""
 
@@ -257,19 +259,25 @@ apply_or_renew_cert() {
         echo "✅ API Token 已保存到 $cf_ini，并设置权限为 600。"
     fi
 
-    if [ -f "$domain_file" ]; then
-        domain=$(head -n 1 "$domain_file")
-        echo "从文件 $domain_file 中读取到域名：$domain"
-    fi
-    if [ -z "$domain" ]; then
-        read -p "请输入您的顶级域名（注意：请输入顶级域名而非子域名，例如：example.com 而不是 www.example.com）: " domain
-        if [ -z "$domain" ]; then
-            echo "❌ 错误：域名不能为空。"
-            return 1
-        else
-            echo "$domain" > "$domain_file"
+    if [ -n "$target_subdomain" ]; then
+        subdomain="$target_subdomain"
+        echo "$subdomain" > "$domain_file"
+    else
+        if [ -f "$domain_file" ]; then
+            subdomain=$(head -n 1 "$domain_file")
+            echo "从文件 $domain_file 中读取到子域名：$subdomain"
+        fi
+        if [ -z "$subdomain" ]; then
+            read -p "请输入您的子域名（例如 sub.example.com）: " subdomain
+            if [ -z "$subdomain" ]; then
+                echo "❌ 错误：域名不能为空。"
+                return 1
+            else
+                echo "$subdomain" > "$domain_file"
+            fi
         fi
     fi
+    domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
 
     echo "---"
     echo "正在使用 Certbot 申请证书..."
@@ -436,6 +444,7 @@ add_ipv4_by_warp() {
 # 4. 安装 Xray
 # ---
 install_xray() {
+    local xray_port="${1:-443}"
     local xray_dir="$fq_dir/xray"
 
     echo "---"
@@ -547,7 +556,7 @@ install_xray() {
   "inbounds": [
     {
       "listen": "::",
-      "port": 443,
+      "port": $xray_port,
       "protocol": "vless",
       "settings": {
         "clients": [
@@ -652,9 +661,13 @@ EOF
 
         ln -sf "$sys_conf" config.json
 
-        echo "正在检查 Xray 配置文件..."
+        echo "正在检查 Xray 配置文件（格式正确性）..."
         local test_output
-        test_output=$(xray test -c "$sys_conf" 2>&1)
+        if command -v jq &> /dev/null; then
+            test_output=$(jq empty "$sys_conf" 2>&1)
+        else
+            test_output=$(python3 -m json.tool "$sys_conf" >/dev/null 2>&1)
+        fi
         if [ $? -eq 0 ]; then
             echo "✅ Xray 配置文件检查通过！"
             break
@@ -668,8 +681,8 @@ EOF
             if [[ "$fix_choice" =~ ^[Yy]$ ]]; then
                 vim config.jsonc
             else
-                echo "⚠️ 配置文件存在错误，后续流程可能出问题。继续执行..."
-                break
+                echo "⚠️ 配置文件存在错误，终止后续过程。"
+                return 1
             fi
         fi
     done
@@ -700,6 +713,10 @@ EOF
     echo "---"
     echo "正在启动 Xray 服务..."
     sudo systemctl restart xray
+    if [ $? -ne 0 ]; then
+        echo "❌ Xray 服务启动失败，请检查 systemctl status xray。"
+        return 1
+    fi
     sudo systemctl status xray --no-pager
     echo "✅ Xray 服务已启动。"
 
@@ -766,12 +783,16 @@ EOF
         local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${PublicKey}&sid=${sid1}&type=tcp&headerType=none"
 
         if [ -n "$ip_v4" ]; then
-            local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
-            echo ""
-            echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
-            echo "$vless_v4" | qrencode -t ansiutf8
-            echo ""
-            echo "链接: $vless_v4"
+            if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
+                local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
+                echo ""
+                echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
+                echo "$vless_v4" | qrencode -t ansiutf8
+                echo ""
+                echo "链接: $vless_v4"
+            else
+                echo "⚠️ 按照配置，系统初始无 IPv4，不再展示 IPv4 VLESS 二维码。"
+            fi
         else
             echo "⚠️ 无 IPv4 地址，跳过 IPv4 VLESS 二维码。"
         fi
@@ -796,20 +817,25 @@ EOF
 # 5. 更新 Nginx 配置 (Stream & Site)
 # ---
 update_nginx_config() {
-    local domain=""
+    local domain="$1"
+    local subdomain="$2"
 
     echo "---"
     echo "正在准备更新 Nginx 配置..."
 
     # 1. 获取域名
-    if [ -f "$domain_file" ]; then
-        domain=$(head -n 1 "$domain_file")
-        echo "✅ 读取到域名：$domain"
-    else
-        read -p "无法自动读取域名，请输入您的域名: " domain
-        if [ -z "$domain" ]; then
-            echo "❌ 域名不能为空，退出。"
-            return 1
+    if [ -z "$domain" ] || [ -z "$subdomain" ]; then
+        if [ -f "$domain_file" ]; then
+            subdomain=$(head -n 1 "$domain_file")
+            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+            echo "✅ 读取到域名：$domain，子域名：$subdomain"
+        else
+            read -p "无法自动读取域名，请输入您的子域名（如 sub.example.com）: " subdomain
+            if [ -z "$subdomain" ]; then
+                echo "❌ 域名不能为空，退出。"
+                return 1
+            fi
+            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
         fi
     fi
     if ! sudo test -f "/etc/letsencrypt/live/$domain/fullchain.pem"; then
@@ -861,15 +887,15 @@ $nginx_sni_map_entries
     upstream xray_reality {
         server [::1]:6443;
     }
-    upstream xray_xhttp {
-        server [::1]:6444;
-    }
-    upstream xray_reality_aliyun {
-        server [::1]:6445;
-    }
-    upstream sb_reality {
-        server [::1]:5443;
-    }
+    #upstream xray_xhttp {
+    #    server [::1]:6444;
+    #}
+    #upstream xray_reality_aliyun {
+    #    server [::1]:6445;
+    #}
+    #upstream sb_reality {
+    #    server [::1]:5443;
+    #}
     upstream my_nginx {
         server [::1]:4443;
     }
@@ -898,15 +924,23 @@ EOF
         echo "✅ Stream 配置已插入到 events 和 http 之间。"
     fi
 
-    # 3. 修改 default 站点配置
-    local default_site="/etc/nginx/sites-available/default"
+    # 检查 include 命令并添加 /etc/nginx/sites-enabled/*
+    sudo mkdir -p /etc/nginx/sites-enabled
+    if ! grep -q "sites-enabled" "$nginx_conf"; then
+        sudo sed -i '/include.*conf\.d\/\*\.conf;/a \    include \/etc\/nginx\/sites-enabled\/*;' "$nginx_conf"
+    fi
+
+    # 3. 修改 default 站点配置 (修改 sites-available 处，实际用 sites-enabled)
+    local default_site="/etc/nginx/sites-enabled/default"
     echo "正在更新站点配置 $default_site ..."
 
+    if [ ! -f "$default_site" ]; then
+        sudo touch "$default_site"
+    fi
     # 备份 default 文件
-    cp "$default_site" "$cert_dir/default_site.bak_$(date +%s)"
+    sudo cp "$default_site" "$cert_dir/default_site.bak_$(date +%s)" 2>/dev/null || true
 
     # 写入新配置 (注意：$domain 是 Shell 变量，\$host 是 Nginx 变量)
-    # 这里将 [sub].[domain] 替换为 www.$domain
     sudo tee "$default_site" > /dev/null <<EOF
 server {
     listen 80 default_server;
@@ -926,7 +960,7 @@ server {
     listen [::]:4443 ssl;
     http2 on;
     # change to SNI name in xray
-    server_name www.$domain $domain; # TODO: change www
+    server_name $subdomain $domain;
 
     ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
@@ -963,8 +997,7 @@ EOF
                 break
             else
                 echo "❌ Nginx 重启失败，请检查 systemctl status nginx。"
-                read -p "按 Enter 键返回菜单..."
-                break
+                return 1
             fi
         else
             echo ""
@@ -984,59 +1017,74 @@ EOF
                 fi
                 echo "编辑完成后，将再次进行测试..."
             else
-                echo "您可以稍后手动修复。按 Enter 键返回..."
-                break
+                echo "您可以稍后手动修复脚本并重新运行。任务已终止。"
+                return 1
             fi
         fi
     done
 }
 
 # ---
-# 主菜单循环
+# 主流程
 # ---
 main() {
-    while true; do
-        echo "---"
-        echo "请选择要执行的操作:"
-        echo "1. 安装必要的软件包并设置系统环境"
-        echo "2. 申请或更新证书"
-        echo "3. 添加 IPv4 支持 (WARP)"
-        echo "4. 安装 Xray"
-        echo "5. 更新 Nginx 配置 (Stream & SNI 分流)"
-        echo "q. 退出"
-        echo "---"
+    install_pkgs_and_setup_env || return 1
 
-        read -p "请输入选项: " choice
+    echo "---"
+    echo "检测IPv4..."
+    ORIGINAL_HAS_IPV4=false
+    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
+       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+        echo "✅ 检测到系统已有 IPv4 出口。"
+        ORIGINAL_HAS_IPV4=true
+    else
+        read -p "未检测到有效的 IPv4 出口，是否要给系统增加 IPv4 支持 (WARP)? [Y/n]: " add_warp
+        if [[ "$add_warp" =~ ^[Yy]$ || -z "$add_warp" ]]; then
+            add_ipv4_by_warp || return 1
+        fi
+    fi
 
-        case "$choice" in
-            1)
-                install_pkgs_and_setup_env
-                ;;
-            2)
-                apply_or_renew_cert
-                ;;
-            3)
-                add_ipv4_by_warp
-                ;;
-            4)
-                install_xray
-                ;;
-            5)
-                update_nginx_config
-                ;;
-            q|Q)
-                echo "---"
-                echo "退出脚本。"
-                echo "---"
-                break
-                ;;
-            *)
-                echo "无效的选项，请重新输入。"
-                ;;
-        esac
+    echo "---"
+    read -p "是否有自有域名？[Y/n]: " has_domain
+    if [[ "$has_domain" =~ ^[Yy]$ || -z "$has_domain" ]]; then
+        echo "👉 将通过 nginx(443) -> xray(6443) 的方式安装"
 
-        echo ""
-    done
+        while true; do
+            read -p "请输入子域名（例如 sub.example.com）: " full_domain
+            if [ -n "$full_domain" ]; then break; fi
+        done
+
+        # 提取 domain 和 subdomain
+        domain=$(echo "$full_domain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+        subdomain=$full_domain
+
+        read -p "该域名是否通过 Cloudflare 管理？[Y/n]: " is_cf
+        if [[ "$is_cf" =~ ^[Yy]$ || -z "$is_cf" ]]; then
+            echo "---"
+            echo "请获取 Cloudflare DNS API token，并配置 $subdomain 的 DNS 指向本机 IP。"
+            # 显示本机 IP
+            local ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+            local ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+            echo "本机 IPv4: ${ip_v4:-无}"
+            echo "本机 IPv6: ${ip_v6:-无}"
+            echo "---"
+
+            apply_or_renew_cert "$subdomain" || return 1
+        else
+            echo "---"
+            echo "将使用 certbot 帮您申请 *.$domain 的证书"
+            sudo certbot certonly --manual --preferred-challenges dns --agree-tos --no-eff-email -d "*.$domain" -d "$domain" || return 1
+            echo "✅ 证书申请完成！"
+        fi
+
+        update_nginx_config "$domain" "$subdomain" || return 1
+        install_xray 6443 || return 1
+    else
+        echo "👉 将通过 xray(443) 的方式安装"
+        install_xray 443 || return 1
+    fi
+    echo "---"
+    echo "✅ 执行完毕。"
 }
 
 check_system
