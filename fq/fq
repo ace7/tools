@@ -459,7 +459,6 @@ install_xray() {
 
     echo "---"
     echo "正在下载并安装 Xray..."
-    #sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
     sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
     mkdir -p "$xray_dir"
@@ -1056,10 +1055,37 @@ interactive_menu() {
             1) install_pkgs_and_setup_env ;;
             2) apply_or_renew_cert ;;
             3) add_ipv4_by_warp ;;
-            4) install_xray ;;
+            4)
+                echo "正在安装/更新 Xray..."
+                sudo systemctl stop xray 2>/dev/null
+                if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
+                    echo "正在启动 Xray 并检查状态..."
+                    sudo systemctl start xray
+                    sleep 2
+                    if sudo systemctl is-active --quiet xray; then
+                        echo "✅ Xray 更新并启动成功！"
+                    else
+                        echo "❌ Xray 更新后启动失败，请检查配置或日志。"
+                    fi
+                else
+                    echo "❌ Xray 更新脚本执行失败。"
+                fi
+                ;;
             5)
                 echo "正在更新 Xray GeoData..."
-                sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
+                sudo systemctl stop xray 2>/dev/null
+                if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata; then
+                    echo "正在重新启动 Xray 并检查状态..."
+                    sudo systemctl start xray
+                    sleep 2
+                    if sudo systemctl is-active --quiet xray; then
+                        echo "✅ GeoData 更新并重启成功！"
+                    else
+                        echo "❌ GeoData 更新后 Xray 重启失败。"
+                    fi
+                else
+                    echo "❌ GeoData 更新脚本执行失败。"
+                fi
                 ;;
             6) update_nginx_config ;;
             q|Q) break ;;
