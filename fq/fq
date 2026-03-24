@@ -16,12 +16,24 @@ check_system() {
         debian|ubuntu)
             echo "✅ 检测到系统: $PRETTY_NAME，继续执行。"
             ;;
-        *)
-            echo "❌ 错误：不支持的操作系统: $PRETTY_NAME ($ID)"
-            echo "本脚本仅支持 Debian 或 Ubuntu 系统，请在支持的系统上运行。"
-            exit 1
             ;;
     esac
+}
+
+# 全局变量记录初始 IPv4 状态
+ORIGINAL_HAS_IPV4=false
+
+check_ipv4_status() {
+    echo "---"
+    echo "正在检测初始系统 IPv4 状态..."
+    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
+       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+        echo "✅ 检测到系统已有原生 IPv4 出口。"
+        ORIGINAL_HAS_IPV4=true
+    else
+        echo "⚠️ 未检测到系统原生 IPv4 出口。"
+        ORIGINAL_HAS_IPV4=false
+    fi
 }
 
 fq_dir="$HOME/gfw"
@@ -454,8 +466,18 @@ add_ipv4_by_warp() {
 # 4. 安装 Xray
 # ---
 install_xray() {
-    local xray_port="${1:-443}"
+    local xray_port="$1"
     local xray_dir="$fq_dir/xray"
+
+    if [ -z "$xray_port" ]; then
+        if sudo ss -ltnp | grep -q ":443 "; then
+            echo "⚠️ 检测到有进程已占用 443 端口 (可能是 Nginx)，Xray 将使用 6443 端口。"
+            xray_port=6443
+        else
+            echo "✅ 检测到 443 端口空闲，Xray 将使用 443 端口。"
+            xray_port=443
+        fi
+    fi
 
     echo "---"
     echo "正在下载并安装 Xray..."
@@ -1043,9 +1065,10 @@ interactive_menu() {
         echo "1. 安装必要的软件包并设置系统环境"
         echo "2. 申请或更新证书"
         echo "3. 添加 IPv4 支持 (WARP)"
-        echo "4. 安装/更新 Xray"
-        echo "5. 更新 Xray GeoData"
-        echo "6. 更新 Nginx 配置 (Stream & SNI 分流)"
+        echo "4. 更新 Nginx 配置 (Stream & SNI 分流)"
+        echo "5. 安装 Xray"
+        echo "6. 更新 Xray"
+        echo "7. 更新 Xray GeoData"
         echo "q. 退出"
         echo "---"
 
@@ -1055,8 +1078,10 @@ interactive_menu() {
             1) install_pkgs_and_setup_env ;;
             2) apply_or_renew_cert ;;
             3) add_ipv4_by_warp ;;
-            4)
-                echo "正在安装/更新 Xray..."
+            4) update_nginx_config ;;
+            5) install_xray ;;
+            6)
+                echo "正在更新 Xray..."
                 sudo systemctl stop xray 2>/dev/null
                 if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
                     echo "正在启动 Xray 并检查状态..."
@@ -1071,7 +1096,7 @@ interactive_menu() {
                     echo "❌ Xray 更新脚本执行失败。"
                 fi
                 ;;
-            5)
+            7)
                 echo "正在更新 Xray GeoData..."
                 sudo systemctl stop xray 2>/dev/null
                 if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata; then
@@ -1087,7 +1112,6 @@ interactive_menu() {
                     echo "❌ GeoData 更新脚本执行失败。"
                 fi
                 ;;
-            6) update_nginx_config ;;
             q|Q) break ;;
             *) echo "无效的选项，请重新输入。" ;;
         esac
@@ -1107,13 +1131,8 @@ main() {
         install_pkgs_and_setup_env || return 1
 
         echo "---"
-        echo "检测IPv4..."
-        ORIGINAL_HAS_IPV4=false
-        if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
-           curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
-            echo "✅ 检测到系统已有 IPv4 出口。"
-            ORIGINAL_HAS_IPV4=true
-        else
+        echo "检测 IPv4..."
+        if [ "$ORIGINAL_HAS_IPV4" = "false" ]; then
             read -p "未检测到有效的 IPv4 出口，是否要给系统增加 IPv4 支持 (WARP)? [Y/n]: " add_warp
             if [[ "$add_warp" =~ ^[Yy]$ || -z "$add_warp" ]]; then
                 add_ipv4_by_warp || return 1
@@ -1167,6 +1186,7 @@ main() {
 }
 
 check_system
+check_ipv4_status
 main
 
 #######
