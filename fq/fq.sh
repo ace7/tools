@@ -16,6 +16,10 @@ check_system() {
         debian|ubuntu)
             echo "✅ 检测到系统: $PRETTY_NAME，继续执行。"
             ;;
+        *)
+            echo "❌ 错误：不支持的操作系统: $PRETTY_NAME ($ID)"
+            echo "本脚本仅支持 Debian 或 Ubuntu 系统，请在支持的系统上运行。"
+            exit 1
             ;;
     esac
 }
@@ -45,58 +49,54 @@ domain_file="$cert_dir/domain.txt"
 # 1. 安装必要的软件包
 # ---
 
+# 通用版本比较函数: version_ge <version> <required> 返回0表示满足
+version_ge() {
+    local ver="$1" req="$2"
+    local vmaj vmin vpatch rmaj rmin rpatch
+    vmaj=$(echo "$ver" | cut -d. -f1)
+    vmin=$(echo "$ver" | cut -d. -f2)
+    vpatch=$(echo "$ver" | cut -d. -f3)
+    rmaj=$(echo "$req" | cut -d. -f1)
+    rmin=$(echo "$req" | cut -d. -f2)
+    rpatch=$(echo "$req" | cut -d. -f3)
+    { [ "$vmaj" -gt "$rmaj" ] || \
+      { [ "$vmaj" -eq "$rmaj" ] && [ "$vmin" -gt "$rmin" ]; } || \
+      { [ "$vmaj" -eq "$rmaj" ] && [ "$vmin" -eq "$rmin" ] && [ "$vpatch" -ge "$rpatch" ]; }; } 2>/dev/null
+}
+
 # 检查并安装满足版本要求的 nginx (>= 1.25.1)
 ensure_nginx_version() {
-    local required_major=1
-    local required_minor=25
-    local required_patch=1
+    local required="1.25.1"
 
     echo "---"
     echo "正在检查 apt 源中的 nginx 版本..."
 
-    # 获取 apt 源中 nginx-full 的候选版本号
-    local apt_version=""
+    local apt_version ver_nums
     apt_version=$(apt-cache policy nginx-full 2>/dev/null | grep 'Candidate:' | awk '{print $2}')
 
     if [ -n "$apt_version" ]; then
-        echo "apt 源中 nginx-full 候选版本: $apt_version"
-        # 提取主版本号 (例如从 "1.24.0-2" 中提取 "1.24.0")
-        local ver_nums
         ver_nums=$(echo "$apt_version" | grep -oP '^\d+\.\d+\.\d+')
-        local major minor patch
-        major=$(echo "$ver_nums" | cut -d. -f1)
-        minor=$(echo "$ver_nums" | cut -d. -f2)
-        patch=$(echo "$ver_nums" | cut -d. -f3)
-
-        # 比较版本号
-        if [ "$major" -gt "$required_major" ] 2>/dev/null || \
-           { [ "$major" -eq "$required_major" ] && [ "$minor" -gt "$required_minor" ]; } 2>/dev/null || \
-           { [ "$major" -eq "$required_major" ] && [ "$minor" -eq "$required_minor" ] && [ "$patch" -ge "$required_patch" ]; } 2>/dev/null; then
-            echo "✅ apt 源中的 nginx 版本 ($ver_nums) >= 1.25.1，将使用系统源安装。"
+        echo "apt 源中 nginx-full 候选版本: $ver_nums"
+        if version_ge "$ver_nums" "$required"; then
+            echo "✅ apt 源中的 nginx 版本 ($ver_nums) >= $required，将使用系统源安装。"
             return 0
         fi
     fi
 
-    echo "⚠️ apt 源中的 nginx 版本不满足要求 (需要 >= 1.25.1)。"
+    echo "⚠️ apt 源中的 nginx 版本不满足要求 (需要 >= $required)。"
     echo "正在添加 nginx 官方仓库..."
 
-    # 安装必要的依赖
     sudo apt install -y curl gnupg2 ca-certificates lsb-release
-
-    # 导入 nginx 官方签名密钥
     curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg --yes
 
-    # 添加 nginx 官方 mainline 仓库 (mainline 分支版本号更高，确保 >= 1.25.1)
     . /etc/os-release
     echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/$ID $(lsb_release -cs) nginx" | \
         sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
 
-    # 设置 nginx 官方仓库优先级高于系统源
     echo -e "Package: *\nPin: origin nginx.org\nPin: release o=nginx\nPin-Priority: 900\n" | \
         sudo tee /etc/apt/preferences.d/99nginx > /dev/null
 
     sudo apt update
-    # 官方仓库提供的包名是 nginx 而非 nginx-full，替换 packages 变量
     packages=$(echo "$packages" | sed 's/nginx-full/nginx/')
     echo "✅ nginx 官方仓库已添加，将安装最新 mainline 版本。"
 }
@@ -120,15 +120,10 @@ install_pkgs_and_setup_env() {
     fi
 
     # 安装后确认 nginx 版本是否满足要求 (>= 1.25.1)
-    local nginx_ver=""
+    local nginx_ver
     nginx_ver=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
     echo "已安装的 nginx 版本: $nginx_ver"
-    local n_major n_minor n_patch
-    n_major=$(echo "$nginx_ver" | cut -d. -f1)
-    n_minor=$(echo "$nginx_ver" | cut -d. -f2)
-    n_patch=$(echo "$nginx_ver" | cut -d. -f3)
-    if ! { [ "$n_major" -gt 1 ] || { [ "$n_major" -eq 1 ] && [ "$n_minor" -gt 25 ]; } || \
-           { [ "$n_major" -eq 1 ] && [ "$n_minor" -eq 25 ] && [ "$n_patch" -ge 1 ]; }; } 2>/dev/null; then
+    if ! version_ge "$nginx_ver" "1.25.1"; then
         echo "❌ 安装后 nginx 版本 ($nginx_ver) 仍不满足要求 (>= 1.25.1)，请手动检查。"
         return 1
     fi
@@ -318,6 +313,7 @@ apply_or_renew_cert() {
     else
         echo ""
         echo "❌ 证书申请失败。请检查您的域名、API Token 以及 DNS 配置。"
+        return 1
     fi
 }
 
@@ -331,14 +327,6 @@ add_ipv4_by_warp() {
     echo "正在检查系统IPv4连接..."
     echo "---"
 
-    # curl -4 ip.p3terx.com
-    # curl -4 ip.sb
-    #if ping -c 1 -W 1 -4 ipv4.google.com &>/dev/null; then
-    #    echo "✅ 系统已有IPv4出口，无需配置WARP。"
-    #    return 0
-    #else
-    #    echo "⚠️ 系统没有IPv4出口，将开始配置WARP。"
-    #fi
     if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
        curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
         echo "✅ 检测到系统已有 IPv4 出口，无需配置 WARP。"
@@ -815,6 +803,7 @@ EOF
 
         if [ -n "$ip_v4" ]; then
             if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
+                # 注意：即使 Xray 监听 6443，客户端连接的仍是 Nginx 的 443，所以这里端口填 443 是正确的
                 local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
                 echo ""
                 echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
@@ -1058,6 +1047,27 @@ EOF
 # ---
 # 6. 交互式菜单 (非第一次运行)
 # ---
+
+# 通用 Xray 组件更新函数
+update_xray_component() {
+    local action="$1"  # "install" 或 "install-geodata"
+    local label="$2"   # 用于日志展示的名称
+    echo "正在更新 $label..."
+    sudo systemctl stop xray 2>/dev/null
+    if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ "$action"; then
+        echo "正在启动 Xray 并检查状态..."
+        sudo systemctl start xray
+        sleep 2
+        if sudo systemctl is-active --quiet xray; then
+            echo "✅ $label 更新并启动成功！"
+        else
+            echo "❌ $label 更新后 Xray 启动失败，请检查配置或日志。"
+        fi
+    else
+        echo "❌ $label 更新脚本执行失败。"
+    fi
+}
+
 interactive_menu() {
     while true; do
         echo "---"
@@ -1080,38 +1090,8 @@ interactive_menu() {
             3) add_ipv4_by_warp ;;
             4) update_nginx_config ;;
             5) install_xray ;;
-            6)
-                echo "正在更新 Xray..."
-                sudo systemctl stop xray 2>/dev/null
-                if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install; then
-                    echo "正在启动 Xray 并检查状态..."
-                    sudo systemctl start xray
-                    sleep 2
-                    if sudo systemctl is-active --quiet xray; then
-                        echo "✅ Xray 更新并启动成功！"
-                    else
-                        echo "❌ Xray 更新后启动失败，请检查配置或日志。"
-                    fi
-                else
-                    echo "❌ Xray 更新脚本执行失败。"
-                fi
-                ;;
-            7)
-                echo "正在更新 Xray GeoData..."
-                sudo systemctl stop xray 2>/dev/null
-                if sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata; then
-                    echo "正在重新启动 Xray 并检查状态..."
-                    sudo systemctl start xray
-                    sleep 2
-                    if sudo systemctl is-active --quiet xray; then
-                        echo "✅ GeoData 更新并重启成功！"
-                    else
-                        echo "❌ GeoData 更新后 Xray 重启失败。"
-                    fi
-                else
-                    echo "❌ GeoData 更新脚本执行失败。"
-                fi
-                ;;
+            6) update_xray_component install "Xray" ;;
+            7) update_xray_component install-geodata "Xray GeoData" ;;
             q|Q) break ;;
             *) echo "无效的选项，请重新输入。" ;;
         esac
@@ -1188,35 +1168,3 @@ main() {
 check_system
 check_ipv4_status
 main
-
-#######
-# 目标网站最低标准：国外网站，支持 TLSv1.3 与 H2，域名非跳转用（主域名可能被用于跳转到 www）
-# 详见 https://github.com/XTLS/REALITY
-# xray tls ping www.microsoft.com
-# check "Allowed domains"
-#######
-# sudo systemctl edit xray.service
-#
-## 这个命令会：
-## 在 /etc/systemd/system/ 下创建一个名为 xray.service.d/ 的目录。
-## 在目录中创建一个名为 override.conf 的空文件，并用编辑器打开它。
-#
-# [Service]
-# ExecStart=
-# ExecStart=/usr/local/bin/xray run -config /path/to/my/custom/config.jsonc
-#
-# sudo systemctl daemon-reload
-# sudo systemctl restart xray
-#######
-# cat file.txt | qrencode -t ansiutf8
-# qrencode -t utf8 "https://www.google.com"
-#######
-# timedatectl
-# timedatectl list-timezones | grep Asia/
-# timedatectl list-timezones | grep Shanghai
-# sudo timedatectl set-timezone Asia/Shanghai
-# timedatectl
-#
-# sudo dpkg-reconfigure tzdata
-# date
-#######
