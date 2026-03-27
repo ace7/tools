@@ -640,6 +640,16 @@ $reality_server_names
     "rules": [
       {
         "type": "field",
+        "domain": [
+          "geosite:google",
+          "domain:gstatic.com",
+          "domain:googleapis.com",
+          "domain:apple.com"
+        ],
+       "outboundTag": "default"
+      },
+      {
+        "type": "field",
         "ip": [
           "geoip:cn"
         ],
