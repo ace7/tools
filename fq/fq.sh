@@ -467,6 +467,10 @@ install_xray() {
         fi
     fi
 
+    # Set listen address: loopback if not on port 443 (e.g., when Nginx is used for port forwarding)
+    local listen_addr="::"
+    [ "$xray_port" != "443" ] && listen_addr="::1"
+
     echo "---"
     echo "正在下载并安装 Xray..."
     sudo bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
@@ -574,7 +578,7 @@ install_xray() {
   },
   "inbounds": [
     {
-      "listen": "::",
+      "listen": "$listen_addr",
       "port": $xray_port,
       "protocol": "vless",
       "settings": {
