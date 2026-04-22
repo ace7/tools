@@ -1,0 +1,110 @@
+{
+    "log": {
+        "disabled": false,
+        "level": "info",
+        "output": "box.log",
+        "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "cf",
+                "type": "tls",
+                "server": "2606:4700:4700::1111"
+            },
+            {
+                "tag": "google",
+                "type": "tls",
+                "server": "2001:4860:4860::8888"
+            }
+        ]
+    },
+    "route": {
+        "default_domain_resolver": {
+            "server": "cf",
+            "strategy": "prefer_ipv6"
+        },
+        "rules": [
+            {
+                "outbound": "block",
+                "rule_set": "geoip-cn"
+            },
+            {
+                "outbound": "block",
+                "rule_set": "geosite-cn"
+            },
+            {
+                "outbound": "block",
+                "ip_is_private": true
+            },
+            {
+                "outbound": "outbound-direct"
+            }
+        ],
+        "rule_set": [
+            {
+                "tag": "geoip-cn",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+                "download_detour": "outbound-direct"
+            },
+            {
+                "tag": "geosite-cn",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+                "download_detour": "outbound-direct"
+            }
+        ]
+    },
+    "experimental": {
+        "cache_file": {
+            "enabled": true
+        }
+    },
+    "inbounds": [
+        {
+            "type": "vless",
+            "tag": "vless-in",
+            "listen": "::1",
+            "listen_port": 5443,
+            "users": [
+                {
+                    "uuid": "TODO_REPLACE_THIS",
+                    "flow": "xtls-rprx-vision"
+                },
+                {
+                    "uuid": "TODO_REPLACE_THIS",
+                    "flow": "xtls-rprx-vision"
+                }
+            ],
+            "tls": {
+                "enabled": true,
+                "server_name": "TODO_REPLACE_THIS",
+                "reality": {
+                    "enabled": true,
+                    "handshake": {
+                        "server": "TODO_REPLACE_THIS",
+                        "server_port": 443
+                    },
+                    "private_key": "TODO_REPLACE_THIS",
+                    "short_id": [
+                        "TODO_REPLACE_THIS"
+                    ],
+                    "max_time_difference": "1m"
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "outbound-direct"
+        },
+        {
+            "type": "block",
+            "tag": "block"
+        }
+    ]
+}
