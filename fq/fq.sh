@@ -294,7 +294,7 @@ apply_or_renew_cert() {
             fi
         fi
     fi
-    domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+    domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
 
     echo "---"
     echo "正在使用 Certbot 申请证书..."
@@ -861,7 +861,7 @@ update_nginx_config() {
     if [ -z "$domain" ] || [ -z "$subdomain" ]; then
         if [ -f "$domain_file" ]; then
             subdomain=$(head -n 1 "$domain_file")
-            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
             echo "✅ 读取到域名：$domain，子域名：$subdomain"
         else
             read -p "无法自动读取域名，请输入您的子域名（如 sub.example.com）: " subdomain
@@ -869,7 +869,7 @@ update_nginx_config() {
                 echo "❌ 域名不能为空，退出。"
                 return 1
             fi
-            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
         fi
     fi
     if ! sudo test -f "/etc/letsencrypt/live/$domain/fullchain.pem"; then
@@ -1144,7 +1144,7 @@ main() {
             done
 
             # 提取 domain 和 subdomain
-            domain=$(echo "$full_domain" | awk -F. '{if (NF>2) {print $(NF-1)"."$NF} else {print $0}}')
+            domain=$(echo "$full_domain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
             subdomain=$full_domain
 
             read -p "该域名是否通过 Cloudflare 管理？[Y/n]: " is_cf
