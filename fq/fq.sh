@@ -121,7 +121,7 @@ install_pkgs_and_setup_env() {
 
     # 安装后确认 nginx 版本是否满足要求 (>= 1.25.1)
     local nginx_ver
-    nginx_ver=$(nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
+    nginx_ver=$(sudo nginx -v 2>&1 | grep -oP '\d+\.\d+\.\d+')
     echo "已安装的 nginx 版本: $nginx_ver"
     if ! version_ge "$nginx_ver" "1.25.1"; then
         echo "❌ 安装后 nginx 版本 ($nginx_ver) 仍不满足要求 (>= 1.25.1)，请手动检查。"
