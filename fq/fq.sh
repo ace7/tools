@@ -26,6 +26,7 @@ check_system() {
 
 # 全局变量记录初始 IPv4 状态
 ORIGINAL_HAS_IPV4=false
+ORIGINAL_HAS_IPV6=false
 
 check_ipv4_status() {
     echo "---"
@@ -37,6 +38,19 @@ check_ipv4_status() {
     else
         echo "⚠️ 未检测到系统原生 IPv4 出口。"
         ORIGINAL_HAS_IPV4=false
+    fi
+}
+
+check_ipv6_status() {
+    echo "---"
+    echo "正在检测初始系统 IPv6 状态..."
+    if curl -6 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
+       curl -6 -s --connect-timeout 2 https://2606:4700:4700::1111 >/dev/null 2>&1; then
+        echo "✅ 检测到系统已有原生 IPv6 出口。"
+        ORIGINAL_HAS_IPV6=true
+    else
+        echo "⚠️ 未检测到系统原生 IPv6 出口。"
+        ORIGINAL_HAS_IPV6=false
     fi
 }
 
@@ -770,12 +784,14 @@ EOF
     # ch = Chaos class, txt = TXT record, whoami.cloudflare = magic domain
     # tr -d '"' 用于去除结果中的引号
     if command -v dig &> /dev/null; then
-        ip_v4=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+        ip_v4=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
     fi
 
     # 2. 查询 IPv6 (dig @2606:4700:4700::1111)
-    if command -v dig &> /dev/null; then
-        ip_v6=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+    if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
+        if command -v dig &> /dev/null; then
+            ip_v6=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
+        fi
     fi
 
     # 3. 将 IP 保存到 xray.key
@@ -799,7 +815,7 @@ EOF
         # 1. echo "# hi" 添加头部欺骗 iOS 相机
         # 2. grep -v 过滤掉包含 PrivateKey 的敏感行
         # 3. 管道传给 qrencode
-        { echo "# hi"; grep -v "PrivateKey" "$xray_key_file"; } | qrencode -t ansiutf8
+        { echo "# hi"; grep -v "PrivateKey" "$xray_key_file"; } | qrencode -t UTF8
 
         echo ""
         echo "💡 提示：请使用 iPhone 相机扫描上方二维码 (已隐藏私钥，并添加头部修正识别问题)。"
@@ -828,7 +844,7 @@ EOF
                 local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
                 echo ""
                 echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
-                echo "$vless_v4" | qrencode -t ansiutf8
+                echo "$vless_v4" | qrencode -t UTF8
                 echo ""
                 echo "链接: $vless_v4"
             else
@@ -843,7 +859,7 @@ EOF
         if [ -n "$ip_v6" ]; then
             local vless_v6="vless://${uuid1}@[${ip_v6}]:443?${vless_params}#VLESS-IPv6"
             echo "📱 IPv6 VLESS 链接二维码 (Shadowrocket):"
-            echo "$vless_v6" | qrencode -t ansiutf8
+            echo "$vless_v6" | qrencode -t UTF8
             echo ""
             echo "链接: $vless_v6"
         else
@@ -1188,8 +1204,11 @@ main() {
                 echo "---"
                 echo "请获取 Cloudflare DNS API token，并配置 $subdomain 的 DNS 指向本机 IP。"
                 # 显示本机 IP
-                local ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
-                local ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | tr -d '"')
+                local ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
+                local ip_v6=""
+                if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
+                    ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
+                fi
                 echo "本机 IPv4: ${ip_v4:-无}"
                 echo "本机 IPv6: ${ip_v6:-无}"
                 echo "---"
@@ -1226,4 +1245,5 @@ main() {
 
 check_system
 check_ipv4_status
+check_ipv6_status
 main
