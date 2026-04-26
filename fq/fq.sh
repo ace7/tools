@@ -1164,6 +1164,12 @@ main() {
                 echo "本机 IPv4: ${ip_v4:-无}"
                 echo "本机 IPv6: ${ip_v6:-无}"
                 echo "---"
+                
+                read -p "DNS 记录配置好了吗？[Y/n]: " dns_confirmed
+                if [[ ! "$dns_confirmed" =~ ^[Yy]$ && -n "$dns_confirmed" ]]; then
+                    echo "❌ 请先配置好 DNS 解析后再运行脚本。"
+                    return 1
+                fi
 
                 apply_or_renew_cert "$subdomain" || return 1
             else
