@@ -503,7 +503,7 @@ install_xray() {
 
     if [ ! -f "$xray_key_file" ]; then
         echo "生成新的 Xray 配置..."
-        xray x25519 > $xray_key_file
+        xray x25519 | sed 's/Password (PublicKey):/PublicKey:/g' > $xray_key_file
         PrivateKey=$(cat $xray_key_file | grep "PrivateKey:" | awk '{print $2}')
         if [ -z "$PrivateKey" ]; then
             echo "❌ 错误: 无法获取 Privatekey。请检查 Xray 是否安装成功。"
@@ -813,7 +813,7 @@ EOF
     if command -v qrencode &> /dev/null; then
         # 从xray.key读取必要参数
         local PublicKey
-        PublicKey=$(grep "^PublicKey:" "$xray_key_file" | awk '{print $2}')
+        PublicKey=$(grep "PublicKey" "$xray_key_file" | awk '{print $NF}')
         local target
         target=$(grep "^target:" "$xray_key_file" | cut -d: -f2)
         local sni="${target:-www.microsoft.com}"
