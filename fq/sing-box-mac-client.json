@@ -65,6 +65,26 @@
         "action": "reject"
       },
       {
+        "rule_set": "geosite-geolocation-cn",
+        "action": "route",
+        "server": "alidns"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "rule_set": "geosite-geolocation-!cn",
+            "invert": true
+          },
+          {
+            "rule_set": "geoip-cn"
+          }
+        ],
+        "action": "route",
+        "server": "alidns"
+      },
+      {
         "rule_set": [
           "geosite-cn",
           "geosite-apple-cn",
@@ -107,7 +127,6 @@
       "tag": "proxy",
       "outbounds": [
         "auto",
-        "us_west_o1",
         "direct"
       ],
       "default": "auto"
@@ -118,7 +137,6 @@
       "outbounds": [
         "proxy",
         "auto",
-        "us_west_o1",
         "direct"
       ],
       "default": "proxy"
@@ -129,7 +147,6 @@
       "outbounds": [
         "proxy",
         "auto",
-        "us_west_o1",
         "direct"
       ],
       "default": "proxy"
@@ -140,8 +157,7 @@
       "outbounds": [
         "direct",
         "proxy",
-        "auto",
-        "us_west_o1"
+        "auto"
       ],
       "default": "direct"
     },
@@ -150,8 +166,8 @@
       "tag": "ai",
       "outbounds": [
         "proxy",
-        "auto",
-        "us_west_o1"
+        "us_west_o1",
+        "auto"
       ],
       "default": "proxy"
     },
@@ -161,7 +177,6 @@
       "outbounds": [
         "proxy",
         "auto",
-        "us_west_o1",
         "direct"
       ],
       "default": "proxy"
@@ -247,6 +262,14 @@
         "outbound": "direct"
       },
       {
+        "domain_suffix": [
+          "waditu.com",
+          "tushare.pro"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
         "clash_mode": "Direct",
         "action": "route",
         "outbound": "direct"
@@ -259,6 +282,26 @@
       {
         "rule_set": "geosite-ads",
         "action": "reject"
+      },
+      {
+        "rule_set": "geosite-geolocation-cn",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "rule_set": "geosite-geolocation-!cn",
+            "invert": true
+          },
+          {
+            "rule_set": "geoip-cn"
+          }
+        ],
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": [
@@ -450,6 +493,13 @@
         "tag": "geosite-telegram",
         "format": "binary",
         "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-telegram.srs",
+        "download_detour": "direct"
+      },
+      {
+        "type": "remote",
+        "tag": "geosite-geolocation-cn",
+        "format": "binary",
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs",
         "download_detour": "direct"
       },
       {
