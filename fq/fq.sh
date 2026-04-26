@@ -1165,11 +1165,14 @@ main() {
                 echo "本机 IPv6: ${ip_v6:-无}"
                 echo "---"
                 
-                read -p "DNS 记录配置好了吗？[Y/n]: " dns_confirmed
-                if [[ ! "$dns_confirmed" =~ ^[Yy]$ && -n "$dns_confirmed" ]]; then
-                    echo "❌ 请先配置好 DNS 解析后再运行脚本。"
-                    return 1
-                fi
+                while true; do
+                    read -p "DNS 记录配置好了吗？[Y/n]: " dns_confirmed
+                    if [[ "$dns_confirmed" =~ ^[Yy]$ || -z "$dns_confirmed" ]]; then
+                        break
+                    else
+                        echo "⚠️ 请前往 Cloudflare 或您的 DNS 提供商配置解析。配置完成后再按 Y 继续..."
+                    fi
+                done
 
                 apply_or_renew_cert "$subdomain" || return 1
             else
