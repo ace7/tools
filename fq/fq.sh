@@ -535,6 +535,7 @@ install_xray() {
     echo "1. Microsoft  (www.microsoft.com) — 推荐用于美国 IP"
     echo "2. Oracle     (www.oracle.com)    — 推荐用于美国 IP"
     echo "3. LoveLive   (www.lovelive-anime.jp) — 推荐用于日本 IP"
+    echo "4. AMP        (amp.dev)           — 推荐用于美国 IP (GCP)"
     read -p "请输入选项 (默认 1): " target_choice
     local reality_target reality_server_names
     case "$target_choice" in
@@ -551,6 +552,12 @@ install_xray() {
             reality_target="www.lovelive-anime.jp:443"
             reality_server_names='            "lovelive-anime.jp",
             "www.lovelive-anime.jp"'
+            ;;
+        4)
+            reality_target="amp.dev:443"
+            reality_server_names='            "amp.dev",
+            "go.amp.dev",
+            "www.amp.dev"'
             ;;
         *)
             reality_target="www.microsoft.com:443"
