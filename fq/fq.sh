@@ -1024,6 +1024,35 @@ server {
 EOF
     echo "✅ 站点配置文件已更新。"
 
+    # 确保 /var/www/html 目录下存在 index.html
+    echo "正在确保存在默认的 index.html 页面..."
+    sudo mkdir -p /var/www/html
+    if [ ! -f /var/www/html/index.html ]; then
+        local found_index
+        found_index=$(ls /var/www/html/index*.html 2>/dev/null | head -n 1)
+        if [ -n "$found_index" ]; then
+            sudo mv "$found_index" /var/www/html/index.html
+            echo "✅ 已将 $found_index 重命名为 index.html"
+        else
+            sudo tee /var/www/html/index.html > /dev/null <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+    body { width: 35em; margin: 0 auto; font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and working. Further configuration is required.</p>
+</body>
+</html>
+EOF
+            echo "✅ 已生成默认的 index.html"
+        fi
+    fi
+
     # 4. 循环检查配置并重启
     echo "---"
     echo "开始检查 Nginx 配置..."
