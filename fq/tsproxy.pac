@@ -1,5 +1,5 @@
 function FindProxyForURL(url, host) {
-    var myProxy = "PROXY 100.99.88.11:7890; DIRECT";
+    var myProxy = "PROXY 10.0.0.123:7890; DIRECT";
 
     if (isPlainHostName(host) ||
         shExpMatch(host, "*.local") ||
