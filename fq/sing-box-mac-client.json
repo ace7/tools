@@ -86,7 +86,7 @@
           }
         ],
         "action": "route",
-        "server": "google",
+        "server": "google-dns",
         "client_subnet": "114.114.114.114/24"
       },
       {
@@ -104,6 +104,12 @@
   },
   "inbounds": [
     {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": 7890
+    },
+    {
       "type": "tun",
       "tag": "tun-in",
       "mtu": 9000,
@@ -113,6 +119,11 @@
       ],
       "auto_route": true,
       "strict_route": true,
+      "route_exclude_address": [
+        "100.64.0.0/10",
+        "10.0.0.0/8",
+        "192.168.0.0/16"
+      ],
       "stack": "mixed"
     }
   ],
@@ -226,6 +237,14 @@
         "outbound": "direct"
       },
       {
+        "ip_cidr": [
+          "TODO_REPLACE_THIS",
+          "TODO_REPLACE_THIS"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
         "type": "logical",
         "mode": "or",
         "rules": [
@@ -241,14 +260,6 @@
           }
         ],
         "action": "reject"
-      },
-      {
-        "ip_cidr": [
-          "TODO_REPLACE_THIS",
-          "TODO_REPLACE_THIS"
-        ],
-        "action": "route",
-        "outbound": "direct"
       },
       {
         "domain_suffix": [
