@@ -96,8 +96,8 @@ prepare_sing_box_domains() {
         return 1
     fi
 
-    expected_anytls_domain="anytls-${subdomain}"
-    expected_hy2_domain="hy2-${subdomain}"
+    expected_anytls_domain="a6-${subdomain}"
+    expected_hy2_domain="h2-${subdomain}"
     anytls_domain=$(get_state_value "anytls_domain" "$sing_box_key_file")
     hy2_domain=$(get_state_value "hy2_domain" "$sing_box_key_file")
 
