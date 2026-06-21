@@ -55,11 +55,13 @@ check_ipv6_status() {
 }
 
 fq_dir="$HOME/gfw"
-packages="ca-certificates curl dnsutils openssl wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full tmux qrencode"
+packages="ca-certificates curl dnsutils openssl wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full tmux qrencode vim less iptables-persistent"
 cert_dir="$fq_dir/cf_cert"
 domain_file="$cert_dir/domain.txt"
 sing_box_dir="$fq_dir/sing-box"
 sing_box_key_file="$sing_box_dir/sing-box.key"
+cf_ini="$cert_dir/cf.ini"
+cf_api_base="https://api.cloudflare.com/client/v4"
 
 get_state_value() {
     local key="$1"
@@ -113,6 +115,199 @@ prepare_sing_box_domains() {
 
     echo "AnyTLS 域名: $anytls_domain"
     echo "Hysteria2 域名: $hy2_domain"
+}
+
+get_cloudflare_token() {
+    local cf_token=""
+
+    mkdir -p "$cert_dir"
+    if [ -f "$cf_ini" ]; then
+        chmod 600 "$cf_ini"
+        cf_token=$(sed -n 's/^[[:space:]]*dns_cloudflare_api_token[[:space:]]*=[[:space:]]*//p' "$cf_ini" | head -n 1)
+    fi
+
+    if [ -z "$cf_token" ]; then
+        echo "Cloudflare Token 需要目标 Zone 的 Zone Read 和 DNS Edit 权限。" >&2
+        read -r -s -p "请粘贴 Cloudflare API Token: " cf_token
+        echo >&2
+        if [ -z "$cf_token" ]; then
+            echo "❌ Cloudflare API Token 不能为空。" >&2
+            return 1
+        fi
+        printf 'dns_cloudflare_api_token = %s\n' "$cf_token" > "$cf_ini"
+        chmod 600 "$cf_ini"
+        echo "✅ API Token 已保存到 $cf_ini。" >&2
+    else
+        echo "✅ 从 $cf_ini 读取 Cloudflare API Token。" >&2
+    fi
+
+    printf '%s' "$cf_token"
+}
+
+cloudflare_api() {
+    local method="$1"
+    local endpoint="$2"
+    local cf_token="$3"
+    local payload="${4:-}"
+
+    if [ -n "$payload" ]; then
+        curl -sS --connect-timeout 10 --max-time 30 -X "$method" \
+            -H "Authorization: Bearer $cf_token" \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "$cf_api_base$endpoint"
+    else
+        curl -sS --connect-timeout 10 --max-time 30 -X "$method" \
+            -H "Authorization: Bearer $cf_token" \
+            -H "Content-Type: application/json" \
+            "$cf_api_base$endpoint"
+    fi
+}
+
+check_cloudflare_response() {
+    local response="$1"
+    local action="$2"
+
+    if ! printf '%s' "$response" | jq -e '.success == true' >/dev/null 2>&1; then
+        echo "❌ Cloudflare API 操作失败: $action"
+        printf '%s' "$response" | jq -r '.errors[]? | "  [\(.code)] \(.message)"' 2>/dev/null
+        return 1
+    fi
+}
+
+upsert_cloudflare_dns_record() {
+    local zone_id="$1"
+    local record_type="$2"
+    local record_name="$3"
+    local record_content="$4"
+    local cf_token="$5"
+    local response=""
+    local record_ids=""
+    local record_id=""
+    local payload=""
+    local action=""
+    local is_first=true
+
+    response=$(cloudflare_api GET "/zones/$zone_id/dns_records?type=$record_type&name=$record_name&match=all" "$cf_token") || return 1
+    check_cloudflare_response "$response" "查询 $record_type $record_name" || return 1
+    record_ids=$(printf '%s' "$response" | jq -r '.result[]?.id')
+    payload=$(jq -nc \
+        --arg type "$record_type" \
+        --arg name "$record_name" \
+        --arg content "$record_content" \
+        '{type:$type,name:$name,content:$content,ttl:1,proxied:false}')
+
+    if [ -n "$record_ids" ]; then
+        while IFS= read -r record_id; do
+            [ -n "$record_id" ] || continue
+            if [ "$is_first" = "true" ]; then
+                response=$(cloudflare_api PUT "/zones/$zone_id/dns_records/$record_id" "$cf_token" "$payload") || return 1
+                check_cloudflare_response "$response" "更新 $record_type $record_name" || return 1
+                is_first=false
+            else
+                response=$(cloudflare_api DELETE "/zones/$zone_id/dns_records/$record_id" "$cf_token") || return 1
+                check_cloudflare_response "$response" "删除重复的 $record_type $record_name" || return 1
+            fi
+        done <<< "$record_ids"
+        action="更新"
+    else
+        response=$(cloudflare_api POST "/zones/$zone_id/dns_records" "$cf_token" "$payload") || return 1
+        check_cloudflare_response "$response" "创建 $record_type $record_name" || return 1
+        action="创建"
+    fi
+
+    echo "✅ 已${action} $record_type $record_name -> ${record_content}（仅 DNS）"
+}
+
+delete_cloudflare_dns_records() {
+    local zone_id="$1"
+    local record_type="$2"
+    local record_name="$3"
+    local cf_token="$4"
+    local response=""
+    local record_ids=""
+    local record_id=""
+
+    response=$(cloudflare_api GET "/zones/$zone_id/dns_records?type=$record_type&name=$record_name&match=all" "$cf_token") || return 1
+    check_cloudflare_response "$response" "查询 $record_type $record_name" || return 1
+    record_ids=$(printf '%s' "$response" | jq -r '.result[]?.id')
+    [ -n "$record_ids" ] || return 0
+
+    while IFS= read -r record_id; do
+        [ -n "$record_id" ] || continue
+        response=$(cloudflare_api DELETE "/zones/$zone_id/dns_records/$record_id" "$cf_token") || return 1
+        check_cloudflare_response "$response" "删除 $record_type $record_name" || return 1
+    done <<< "$record_ids"
+    echo "✅ 已删除无对应公网地址的 $record_type $record_name"
+}
+
+configure_cloudflare_dns() {
+    local domain="$1"
+    local subdomain="$2"
+    local ip_v4="$3"
+    local ip_v6="$4"
+    local cf_token=""
+    local response=""
+    local zone_id=""
+    local anytls_domain=""
+    local hy2_domain=""
+    local record_name=""
+
+    if [ -z "$ip_v4" ] && [ -z "$ip_v6" ]; then
+        echo "❌ 未获取到原生公网 IPv4 或 IPv6，拒绝修改 Cloudflare DNS。"
+        return 1
+    fi
+
+    prepare_sing_box_domains "$subdomain" || return 1
+    anytls_domain=$(get_state_value "anytls_domain" "$sing_box_key_file")
+    hy2_domain=$(get_state_value "hy2_domain" "$sing_box_key_file")
+    cf_token=$(get_cloudflare_token) || return 1
+
+    echo "正在查找 Cloudflare Zone: $domain"
+    response=$(cloudflare_api GET "/zones?name=$domain&status=active&per_page=1" "$cf_token") || return 1
+    check_cloudflare_response "$response" "查询 Zone $domain" || return 1
+    zone_id=$(printf '%s' "$response" | jq -r '.result[0].id // empty')
+    if [ -z "$zone_id" ]; then
+        echo "❌ 未找到 Cloudflare Zone: $domain。请检查 Token 的 Zone Read 权限和域名范围。"
+        return 1
+    fi
+
+    echo "---"
+    echo "正在通过 Cloudflare API 配置 DNS..."
+    for record_name in "$subdomain" "$anytls_domain" "$hy2_domain"; do
+        if [ -n "$ip_v4" ]; then
+            upsert_cloudflare_dns_record "$zone_id" A "$record_name" "$ip_v4" "$cf_token" || return 1
+        else
+            delete_cloudflare_dns_records "$zone_id" A "$record_name" "$cf_token" || return 1
+        fi
+        if [ -n "$ip_v6" ]; then
+            upsert_cloudflare_dns_record "$zone_id" AAAA "$record_name" "$ip_v6" "$cf_token" || return 1
+        else
+            delete_cloudflare_dns_records "$zone_id" AAAA "$record_name" "$cf_token" || return 1
+        fi
+    done
+}
+
+generate_connection_qr() {
+    local label="$1"
+    local link="$2"
+    local output_file="$3"
+
+    [ -n "$link" ] || return 0
+    if ! command -v qrencode >/dev/null 2>&1; then
+        echo "⚠️ 未找到 qrencode，跳过 $label 二维码。"
+        return 0
+    fi
+
+    echo "---"
+    echo "$label 二维码:"
+    printf '%s' "$link" | qrencode -t UTF8 -m 2
+    if printf '%s' "$link" | qrencode -o "$output_file" -s 8 -m 2; then
+        chmod 600 "$output_file"
+        echo "二维码文件: $output_file"
+    else
+        echo "⚠️ $label PNG 二维码生成失败。"
+    fi
 }
 
 # ---
@@ -202,6 +397,81 @@ ensure_tcp_fast_open() {
     echo "✅ TCP Fast Open 已启用并持久化 (值: 3)。"
 }
 
+ensure_proxy_firewall_ports() {
+    local tcp_rule_missing=false
+    local udp_rule_missing=false
+    local reject_line=""
+    local backup_file=""
+
+    echo "---"
+    echo "正在检查 IPv4 防火墙的 TCP/UDP 443..."
+    if ! command -v iptables >/dev/null 2>&1; then
+        echo "❌ 未找到 iptables，无法配置 IPv4 防火墙。"
+        return 1
+    fi
+
+    if ! sudo iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; then
+        tcp_rule_missing=true
+    fi
+    if ! sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null; then
+        udp_rule_missing=true
+    fi
+
+    if [ "$tcp_rule_missing" = "true" ] || [ "$udp_rule_missing" = "true" ]; then
+        if sudo test -f /etc/iptables/rules.v4; then
+            backup_file="/etc/iptables/rules.v4.bak.$(date +%Y%m%d%H%M%S)"
+            sudo cp /etc/iptables/rules.v4 "$backup_file"
+            echo "✅ 已备份 IPv4 防火墙规则到 $backup_file"
+        fi
+    fi
+
+    if [ "$tcp_rule_missing" = "true" ]; then
+        reject_line=$(sudo iptables -L INPUT --line-numbers -n | \
+            awk '$2 == "REJECT" || $2 == "DROP" { print $1; exit }')
+        if [ -n "$reject_line" ]; then
+            sudo iptables -I INPUT "$reject_line" \
+                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+        else
+            sudo iptables -A INPUT \
+                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+        fi
+        echo "✅ 已放行 IPv4 TCP 443。"
+    fi
+
+    if [ "$udp_rule_missing" = "true" ]; then
+        reject_line=$(sudo iptables -L INPUT --line-numbers -n | \
+            awk '$2 == "REJECT" || $2 == "DROP" { print $1; exit }')
+        if [ -n "$reject_line" ]; then
+            sudo iptables -I INPUT "$reject_line" -p udp --dport 443 -j ACCEPT
+        else
+            sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT
+        fi
+        echo "✅ 已放行 IPv4 UDP 443。"
+    fi
+
+    if ! sudo iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
+       ! sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null; then
+        echo "❌ IPv4 TCP/UDP 443 防火墙规则验证失败。"
+        return 1
+    fi
+
+    if command -v netfilter-persistent >/dev/null 2>&1; then
+        if ! sudo netfilter-persistent save; then
+            echo "❌ IPv4 防火墙规则持久化失败。"
+            return 1
+        fi
+    else
+        sudo install -d -m 755 /etc/iptables
+        if ! sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null; then
+            echo "❌ 无法保存 IPv4 防火墙规则。"
+            return 1
+        fi
+        echo "⚠️ 未找到 netfilter-persistent，规则已写入 /etc/iptables/rules.v4，但需确认启动时会加载。"
+    fi
+
+    echo "✅ IPv4 TCP/UDP 443 已放行并持久化。"
+}
+
 install_pkgs_and_setup_env() {
     echo "---"
     echo "开始安装必要的软件包: $packages"
@@ -211,7 +481,7 @@ install_pkgs_and_setup_env() {
     # 先检查 apt 源中的 nginx 版本，如不满足要求则添加官方源
     ensure_nginx_version
 
-    sudo apt install -y $packages
+    sudo env DEBIAN_FRONTEND=noninteractive apt install -y $packages
 
     if [ $? -eq 0 ]; then
         echo "✅ 所有软件包已成功安装！"
@@ -221,6 +491,7 @@ install_pkgs_and_setup_env() {
     fi
 
     ensure_tcp_fast_open || return 1
+    ensure_proxy_firewall_ports || return 1
 
     # 安装后确认 nginx 版本是否满足要求 (>= 1.25.1)
     local nginx_ver
@@ -340,35 +611,17 @@ EOF
 # ---
 apply_or_renew_cert() {
     local target_subdomain="$1"
-    local cf_ini="$cert_dir/cf.ini"
     local subdomain=""
     local domain=""
-    local cf_token=""
     local cert_domains=()
 
     echo "---"
     echo "开始为您的域名申请泛域名证书"
-    echo "请登录 Cloudflare，前往“API 令牌”页面，创建一个 DNS 编辑令牌。"
-    echo "详细步骤请参考：Login Cloudflare, Go to \"API Tokens\", create dns edit token, then copy."
     echo "---"
 
     mkdir -p "$cert_dir"
     cd "$cert_dir" || { echo "无法进入目录 $cert_dir，退出。"; return 1; }
-
-    # 检查 cf.ini 文件是否存在及权限
-    if [ -f "$cf_ini" ]; then
-        chmod 600 "$cf_ini"
-        echo "✅ 从 $cf_ini 文件读取 API Token..."
-    else
-        read -p "请粘贴您的 Cloudflare API Token: " cf_token
-        if [ -z "$cf_token" ]; then
-            echo "❌ 错误：API Token 不能为空。"
-            return 1
-        fi
-        echo "dns_cloudflare_api_token = $cf_token" > "$cf_ini"
-        chmod 600 "$cf_ini"
-        echo "✅ API Token 已保存到 $cf_ini，并设置权限为 600。"
-    fi
+    get_cloudflare_token >/dev/null || return 1
 
     if [ -n "$target_subdomain" ]; then
         subdomain="$target_subdomain"
@@ -597,6 +850,7 @@ install_sing_box() {
         domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
     fi
     ensure_tcp_fast_open || return 1
+    ensure_proxy_firewall_ports || return 1
 
     cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
     key_path="/etc/letsencrypt/live/$domain/privkey.pem"
@@ -887,6 +1141,12 @@ EOF
     [ -n "$vless_link" ] && echo "VLESS 链接: $vless_link"
     echo "AnyTLS 链接: $anytls_link"
     echo "Hysteria2 链接: $hy2_link"
+
+    if [ -n "$vless_link" ]; then
+        generate_connection_qr "VLESS" "$vless_link" "$sing_box_dir/vless.png"
+    fi
+    generate_connection_qr "AnyTLS" "$anytls_link" "$sing_box_dir/anytls.png"
+    generate_connection_qr "Hysteria2" "$hy2_link" "$sing_box_dir/hy2.png"
 }
 
 # ---
@@ -1716,31 +1976,33 @@ main() {
             read -p "该域名是否通过 Cloudflare 管理？[Y/n]: " is_cf
             if [[ "$is_cf" =~ ^[Yy]$ || -z "$is_cf" ]]; then
                 echo "---"
-                echo "请获取 Cloudflare DNS API token，并将以下 DNS 记录指向本机 IP："
+                echo "将通过 Cloudflare API 自动配置以下 DNS 记录："
                 echo "  $subdomain"
                 echo "  $anytls_domain"
                 echo "  $hy2_domain"
-                echo "Cloudflare 代理状态必须设为“仅 DNS”(灰色云朵)。"
-                # 显示本机 IP
-                local ip_v4
+                local ip_v4=""
                 local ip_v6=""
-                ip_v4=$(curl -4 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
+                if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
+                    ip_v4=$(curl -4 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || \
+                        dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+                    if [ -z "$ip_v4" ]; then
+                        echo "❌ 已检测到原生 IPv4，但无法获取公网 IPv4 地址，拒绝修改 DNS。"
+                        return 1
+                    fi
+                fi
                 if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
-                    ip_v6=$(curl -6 -s --connect-timeout 2 ip.sb 2>/dev/null || dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
+                    ip_v6=$(curl -6 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || \
+                        dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+                    if [ -z "$ip_v6" ]; then
+                        echo "❌ 已检测到原生 IPv6，但无法获取公网 IPv6 地址，拒绝修改 DNS。"
+                        return 1
+                    fi
                 fi
                 echo "本机 IPv4: ${ip_v4:-无}"
                 echo "本机 IPv6: ${ip_v6:-无}"
                 echo "---"
-                
-                while true; do
-                    read -p "DNS 记录配置好了吗？[Y/n]: " dns_confirmed
-                    if [[ "$dns_confirmed" =~ ^[Yy]$ || -z "$dns_confirmed" ]]; then
-                        break
-                    else
-                        echo "⚠️ 请前往 Cloudflare 或您的 DNS 提供商配置解析。配置完成后再按 Y 继续..."
-                    fi
-                done
 
+                configure_cloudflare_dns "$domain" "$subdomain" "$ip_v4" "$ip_v6" || return 1
                 apply_or_renew_cert "$subdomain" || return 1
             else
                 echo "---"
