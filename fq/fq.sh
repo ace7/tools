@@ -406,8 +406,8 @@ ensure_proxy_firewall_ports() {
     echo "---"
     echo "正在检查 IPv4 防火墙的 TCP/UDP 443..."
     if ! command -v iptables >/dev/null 2>&1; then
-        echo "❌ 未找到 iptables，无法配置 IPv4 防火墙。"
-        return 1
+        echo "⚠️ 未找到 iptables，跳过 IPv4 防火墙配置。"
+        return 0
     fi
 
     if ! sudo iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; then
@@ -420,51 +420,68 @@ ensure_proxy_firewall_ports() {
     if [ "$tcp_rule_missing" = "true" ] || [ "$udp_rule_missing" = "true" ]; then
         if sudo test -f /etc/iptables/rules.v4; then
             backup_file="/etc/iptables/rules.v4.bak.$(date +%Y%m%d%H%M%S)"
-            sudo cp /etc/iptables/rules.v4 "$backup_file"
-            echo "✅ 已备份 IPv4 防火墙规则到 $backup_file"
+            if sudo cp /etc/iptables/rules.v4 "$backup_file"; then
+                echo "✅ 已备份 IPv4 防火墙规则到 $backup_file"
+            else
+                echo "⚠️ IPv4 防火墙规则备份失败，继续执行。"
+            fi
         fi
     fi
 
     if [ "$tcp_rule_missing" = "true" ]; then
-        reject_line=$(sudo iptables -L INPUT --line-numbers -n | \
+        reject_line=$(sudo iptables -L INPUT --line-numbers -n 2>/dev/null | \
             awk '$2 == "REJECT" || $2 == "DROP" { print $1; exit }')
         if [ -n "$reject_line" ]; then
-            sudo iptables -I INPUT "$reject_line" \
-                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+            if sudo iptables -I INPUT "$reject_line" \
+                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT; then
+                echo "✅ 已放行 IPv4 TCP 443。"
+            else
+                echo "⚠️ IPv4 TCP 443 放行失败，继续执行。"
+            fi
         else
-            sudo iptables -A INPUT \
-                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+            if sudo iptables -A INPUT \
+                -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT; then
+                echo "✅ 已放行 IPv4 TCP 443。"
+            else
+                echo "⚠️ IPv4 TCP 443 放行失败，继续执行。"
+            fi
         fi
-        echo "✅ 已放行 IPv4 TCP 443。"
     fi
 
     if [ "$udp_rule_missing" = "true" ]; then
-        reject_line=$(sudo iptables -L INPUT --line-numbers -n | \
+        reject_line=$(sudo iptables -L INPUT --line-numbers -n 2>/dev/null | \
             awk '$2 == "REJECT" || $2 == "DROP" { print $1; exit }')
         if [ -n "$reject_line" ]; then
-            sudo iptables -I INPUT "$reject_line" -p udp --dport 443 -j ACCEPT
+            if sudo iptables -I INPUT "$reject_line" -p udp --dport 443 -j ACCEPT; then
+                echo "✅ 已放行 IPv4 UDP 443。"
+            else
+                echo "⚠️ IPv4 UDP 443 放行失败，继续执行。"
+            fi
         else
-            sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT
+            if sudo iptables -A INPUT -p udp --dport 443 -j ACCEPT; then
+                echo "✅ 已放行 IPv4 UDP 443。"
+            else
+                echo "⚠️ IPv4 UDP 443 放行失败，继续执行。"
+            fi
         fi
-        echo "✅ 已放行 IPv4 UDP 443。"
     fi
 
     if ! sudo iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || \
        ! sudo iptables -C INPUT -p udp --dport 443 -j ACCEPT 2>/dev/null; then
-        echo "❌ IPv4 TCP/UDP 443 防火墙规则验证失败。"
-        return 1
+        echo "⚠️ IPv4 TCP/UDP 443 防火墙规则验证失败，继续执行。"
+        return 0
     fi
 
     if command -v netfilter-persistent >/dev/null 2>&1; then
         if ! sudo netfilter-persistent save; then
-            echo "❌ IPv4 防火墙规则持久化失败。"
-            return 1
+            echo "⚠️ IPv4 防火墙规则持久化失败，继续执行。"
+            return 0
         fi
     else
         sudo install -d -m 755 /etc/iptables
         if ! sudo iptables-save | sudo tee /etc/iptables/rules.v4 >/dev/null; then
-            echo "❌ 无法保存 IPv4 防火墙规则。"
-            return 1
+            echo "⚠️ 无法保存 IPv4 防火墙规则，继续执行。"
+            return 0
         fi
         echo "⚠️ 未找到 netfilter-persistent，规则已写入 /etc/iptables/rules.v4，但需确认启动时会加载。"
     fi
@@ -491,7 +508,7 @@ install_pkgs_and_setup_env() {
     fi
 
     ensure_tcp_fast_open || return 1
-    ensure_proxy_firewall_ports || return 1
+    ensure_proxy_firewall_ports
 
     # 安装后确认 nginx 版本是否满足要求 (>= 1.25.1)
     local nginx_ver
@@ -850,7 +867,7 @@ install_sing_box() {
         domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
     fi
     ensure_tcp_fast_open || return 1
-    ensure_proxy_firewall_ports || return 1
+    ensure_proxy_firewall_ports
 
     cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
     key_path="/etc/letsencrypt/live/$domain/privkey.pem"
