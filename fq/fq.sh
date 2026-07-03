@@ -62,6 +62,7 @@ sing_box_dir="$fq_dir/sing-box"
 sing_box_key_file="$sing_box_dir/sing-box.key"
 cf_ini="$cert_dir/cf.ini"
 cf_api_base="https://api.cloudflare.com/client/v4"
+certbot_dns_propagation_seconds=120
 
 get_state_value() {
     local key="$1"
@@ -308,6 +309,25 @@ generate_connection_qr() {
     else
         echo "⚠️ $label PNG 二维码生成失败。"
     fi
+}
+
+get_subdomain_prefix() {
+    local subdomain="$1"
+    local prefix="${subdomain%%.*}"
+
+    prefix=$(printf '%s' "$prefix" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//')
+    printf '%s' "$prefix"
+}
+
+make_link_tag() {
+    local subdomain="$1"
+    local core="$2"
+    local protocol="$3"
+    local prefix
+
+    prefix=$(get_subdomain_prefix "$subdomain")
+    [ -n "$prefix" ] || prefix="node"
+    printf '%s-%s-%s' "$prefix" "$core" "$protocol"
 }
 
 # ---
@@ -673,10 +693,11 @@ apply_or_renew_cert() {
 
     echo "---"
     echo "正在使用 Certbot 申请证书..."
-    sudo certbot certonly \
+    sudo env PYTHONWARNINGS=ignore::PendingDeprecationWarning certbot certonly \
         --no-eff-email \
         --dns-cloudflare \
         --dns-cloudflare-credentials "$cf_ini" \
+        --dns-cloudflare-propagation-seconds "$certbot_dns_propagation_seconds" \
         --agree-tos \
         --cert-name "$domain" \
         "${cert_domains[@]}" \
@@ -851,6 +872,9 @@ install_sing_box() {
     local vless_link=""
     local anytls_link=""
     local hy2_link=""
+    local vless_tag=""
+    local anytls_tag=""
+    local hy2_tag=""
     local installer_file=""
 
     if [ -z "$subdomain" ] && [ -f "$domain_file" ]; then
@@ -1141,12 +1165,15 @@ EOF
     elif [ -n "$ip_v6" ]; then
         server_address="[$ip_v6]"
     fi
+    vless_tag=$(make_link_tag "$subdomain" "sb" "vless")
+    anytls_tag=$(make_link_tag "$subdomain" "sb" "anytls")
+    hy2_tag=$(make_link_tag "$subdomain" "sb" "hy2")
     if [ -n "$server_address" ]; then
-        vless_link="vless://${uuid}@${server_address}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_target}&fp=chrome&pbk=${reality_public_key}&sid=${reality_short_id}&type=tcp#sing-box-vless"
+        vless_link="vless://${uuid}@${server_address}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_target}&fp=chrome&pbk=${reality_public_key}&sid=${reality_short_id}&type=tcp&tfo=1#${vless_tag}"
         set_state_value "vless_link" "$vless_link" "$sing_box_key_file"
     fi
-    anytls_link="anytls://${anytls_password}@${anytls_domain}:443?security=tls&sni=${anytls_domain}#sing-box-anytls"
-    hy2_link="hysteria2://${hy2_password}@${hy2_domain}:443?sni=${hy2_domain}#sing-box-hy2"
+    anytls_link="anytls://${anytls_password}@${anytls_domain}:443?security=tls&sni=${anytls_domain}#${anytls_tag}"
+    hy2_link="hysteria2://${hy2_password}@${hy2_domain}:443?sni=${hy2_domain}#${hy2_tag}"
     set_state_value "anytls_link" "$anytls_link" "$sing_box_key_file"
     set_state_value "hy2_link" "$hy2_link" "$sing_box_key_file"
 
@@ -1557,15 +1584,21 @@ EOF
         local target
         target=$(grep "^target:" "$xray_key_file" | cut -d: -f2)
         local sni="${target:-www.microsoft.com}"
+        local xray_subdomain=""
+        local vless_tag=""
+        if [ -f "$domain_file" ]; then
+            xray_subdomain=$(head -n 1 "$domain_file")
+        fi
+        vless_tag=$(make_link_tag "$xray_subdomain" "xray" "vless")
 
         # 构建 VLESS 链接
         # 格式: vless://UUID@地址:端口?参数#备注名
-        local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${PublicKey}&sid=${sid1}&type=tcp&headerType=none"
+        local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${PublicKey}&sid=${sid1}&type=tcp&headerType=none&tfo=1"
 
         if [ -n "$ip_v4" ]; then
             if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
                 # 注意：即使 Xray 监听 6443，客户端连接的仍是 Nginx 的 443，所以这里端口填 443 是正确的
-                local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#VLESS-IPv4"
+                local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#${vless_tag}"
                 echo ""
                 echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
                 echo "$vless_v4" | qrencode -t UTF8
@@ -1581,7 +1614,7 @@ EOF
         echo ""
 
         if [ -n "$ip_v6" ]; then
-            local vless_v6="vless://${uuid1}@[${ip_v6}]:443?${vless_params}#VLESS-IPv6"
+            local vless_v6="vless://${uuid1}@[${ip_v6}]:443?${vless_params}#${vless_tag}"
             echo "📱 IPv6 VLESS 链接二维码 (Shadowrocket):"
             echo "$vless_v6" | qrencode -t UTF8
             echo ""
