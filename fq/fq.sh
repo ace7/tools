@@ -68,7 +68,7 @@ get_state_value() {
     local key="$1"
     local file="$2"
     [ -f "$file" ] || return 0
-    awk -F: -v key="$key" '$1 == key { print substr($0, index($0, ":") + 1); exit }' "$file"
+    awk -F: -v key="$key" '$1 == key { value = substr($0, index($0, ":") + 1); sub(/^[[:space:]]+/, "", value); print value; exit }' "$file"
 }
 
 set_state_value() {
@@ -83,6 +83,28 @@ set_state_value() {
         grep -v "^${key}:" "$file" > "$tmp_file" || true
     fi
     printf '%s:%s\n' "$key" "$value" >> "$tmp_file"
+    mv "$tmp_file" "$file"
+    chmod 600 "$file"
+}
+
+remove_state_keys() {
+    local file="$1"
+    local tmp_file
+    shift
+
+    [ -f "$file" ] || return 0
+    [ "$#" -gt 0 ] || return 0
+
+    tmp_file=$(mktemp)
+    awk -F: -v keys="$*" '
+        BEGIN {
+            split(keys, key_list, " ")
+            for (i in key_list) {
+                drop[key_list[i]] = 1
+            }
+        }
+        !($1 in drop)
+    ' "$file" > "$tmp_file"
     mv "$tmp_file" "$file"
     chmod 600 "$file"
 }
@@ -311,6 +333,19 @@ generate_connection_qr() {
     fi
 }
 
+generate_connection_info_qr() {
+    local info="$1"
+    local text_file="$2"
+    local qr_file="$3"
+
+    [ -n "$info" ] || return 0
+    mkdir -p "$(dirname "$text_file")"
+    printf '%s\n' "$info" > "$text_file"
+    chmod 600 "$text_file"
+    generate_connection_qr "完整连接信息" "$info" "$qr_file"
+    echo "完整信息文件: $text_file"
+}
+
 get_subdomain_prefix() {
     local subdomain="$1"
     local prefix="${subdomain%%.*}"
@@ -328,6 +363,17 @@ make_link_tag() {
     prefix=$(get_subdomain_prefix "$subdomain")
     [ -n "$prefix" ] || prefix="node"
     printf '%s-%s-%s' "$prefix" "$core" "$protocol"
+}
+
+format_link_server_address() {
+    local ip_v4="$1"
+    local ip_v6="$2"
+
+    if [ -n "$ip_v4" ]; then
+        printf '%s' "$ip_v4"
+    elif [ -n "$ip_v6" ]; then
+        printf '[%s]' "$ip_v6"
+    fi
 }
 
 # ---
@@ -854,6 +900,7 @@ install_sing_box() {
     local subdomain="$2"
     local cert_path=""
     local key_path=""
+    local cert_expires=""
     local uuid=""
     local reality_private_key=""
     local reality_public_key=""
@@ -876,6 +923,7 @@ install_sing_box() {
     local anytls_tag=""
     local hy2_tag=""
     local installer_file=""
+    local full_info=""
 
     if [ -z "$subdomain" ] && [ -f "$domain_file" ]; then
         subdomain=$(head -n 1 "$domain_file")
@@ -899,6 +947,7 @@ install_sing_box() {
         echo "❌ 未找到 $domain 的证书或私钥，请先申请证书。"
         return 1
     fi
+    cert_expires=$(sudo openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
 
     prepare_sing_box_domains "$subdomain" || return 1
     anytls_domain=$(get_state_value "anytls_domain" "$sing_box_key_file")
@@ -973,6 +1022,7 @@ install_sing_box() {
         esac
         set_state_value "reality_target" "$reality_target" "$sing_box_key_file"
     fi
+    remove_state_keys "$sing_box_key_file" anytls_reality_target
     if [ -z "$anytls_password" ]; then
         anytls_password=$(openssl rand -hex 16)
         set_state_value "anytls_password" "$anytls_password" "$sing_box_key_file"
@@ -1160,37 +1210,58 @@ EOF
     set_state_value "ipv4" "$ip_v4" "$sing_box_key_file"
     set_state_value "ipv6" "$ip_v6" "$sing_box_key_file"
 
-    if [ -n "$ip_v4" ]; then
-        server_address="$ip_v4"
-    elif [ -n "$ip_v6" ]; then
-        server_address="[$ip_v6]"
-    fi
+    server_address=$(format_link_server_address "$ip_v4" "$ip_v6")
     vless_tag=$(make_link_tag "$subdomain" "sb" "vless")
     anytls_tag=$(make_link_tag "$subdomain" "sb" "anytls")
     hy2_tag=$(make_link_tag "$subdomain" "sb" "hy2")
     if [ -n "$server_address" ]; then
         vless_link="vless://${uuid}@${server_address}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${reality_target}&fp=chrome&pbk=${reality_public_key}&sid=${reality_short_id}&type=tcp&tfo=1#${vless_tag}"
         set_state_value "vless_link" "$vless_link" "$sing_box_key_file"
+        anytls_link="anytls://${anytls_password}@${server_address}:443?security=tls&sni=${anytls_domain}#${anytls_tag}"
+        hy2_link="hysteria2://${hy2_password}@${server_address}:443?sni=${hy2_domain}#${hy2_tag}"
+        set_state_value "anytls_link" "$anytls_link" "$sing_box_key_file"
+        set_state_value "hy2_link" "$hy2_link" "$sing_box_key_file"
+    else
+        echo "⚠️ 未获取到公网 IP，跳过 VLESS/AnyTLS/Hysteria2 分享链接生成。"
     fi
-    anytls_link="anytls://${anytls_password}@${anytls_domain}:443?security=tls&sni=${anytls_domain}#${anytls_tag}"
-    hy2_link="hysteria2://${hy2_password}@${hy2_domain}:443?sni=${hy2_domain}#${hy2_tag}"
-    set_state_value "anytls_link" "$anytls_link" "$sing_box_key_file"
-    set_state_value "hy2_link" "$hy2_link" "$sing_box_key_file"
 
     echo "✅ sing-box 已安装并启动。"
     echo "配置: $system_config"
     echo "连接信息: $sing_box_key_file"
-    echo "AnyTLS: $anytls_domain:443/TCP"
+    echo "AnyTLS: $anytls_domain:443/TCP (server=${server_address:-无})"
     echo "Hysteria2: $hy2_domain:443/UDP"
     [ -n "$vless_link" ] && echo "VLESS 链接: $vless_link"
-    echo "AnyTLS 链接: $anytls_link"
-    echo "Hysteria2 链接: $hy2_link"
+    [ -n "$anytls_link" ] && echo "AnyTLS 链接: $anytls_link"
+    [ -n "$hy2_link" ] && echo "Hysteria2 链接: $hy2_link"
 
     if [ -n "$vless_link" ]; then
         generate_connection_qr "VLESS" "$vless_link" "$sing_box_dir/vless.png"
     fi
-    generate_connection_qr "AnyTLS" "$anytls_link" "$sing_box_dir/anytls.png"
-    generate_connection_qr "Hysteria2" "$hy2_link" "$sing_box_dir/hy2.png"
+    [ -n "$anytls_link" ] && generate_connection_qr "AnyTLS" "$anytls_link" "$sing_box_dir/anytls.png"
+    [ -n "$hy2_link" ] && generate_connection_qr "Hysteria2" "$hy2_link" "$sing_box_dir/hy2.png"
+
+    full_info=$(cat <<EOF
+FQ VPS
+IPv4: ${ip_v4:-无}
+IPv6: ${ip_v6:-无}
+Domain: ${domain:-无}
+Subdomain: ${subdomain:-无}
+AnyTLS domain: ${anytls_domain:-无}
+Hysteria2 domain: ${hy2_domain:-无}
+Certificate: ${cert_path:-无}
+Certificate expires: ${cert_expires:-未知}
+
+VLESS:
+${vless_link:-无}
+
+AnyTLS:
+${anytls_link:-无}
+
+Hysteria2:
+${hy2_link:-无}
+EOF
+)
+    generate_connection_info_qr "$full_info" "$sing_box_dir/full-info.txt" "$sing_box_dir/full-info.png"
 }
 
 # ---
@@ -1226,51 +1297,51 @@ install_xray() {
     echo "---"
     echo "正在生成或加载 Xray 配置所需的密钥和ID..."
     local xray_key_file="$xray_dir/xray.key"
-    local PrivateKey=""
-    local uuid1=""
-    local uuid2=""
-    local sid1=""
-    local sid2=""
+    local private_key=""
+    local public_key=""
+    local uuid=""
+    local sid=""
     local xhttp_path=""
+    local reality_output=""
 
-    if [ -f "$xray_key_file" ]; then
-        echo "✅ 从 $xray_key_file 读取配置..."
-        source <(grep -E '^(PrivateKey|uuid1|uuid2|sid1|sid2|xhttp_path):' "$xray_key_file" | sed 's/:\s*/="/;s/$/"/' | sed 's/\(.*\)/export \1/')
-        if [ -z "$PrivateKey" ] || [ -z "$uuid1" ] || [ -z "$uuid2" ] || [ -z "$sid1" ] || [ -z "$sid2" ] || [ -z "$xhttp_path" ]; then
-            echo "❌ 错误：配置文件 $xray_key_file 缺少必要的变量。将重新生成。"
-            rm -f "$xray_key_file"
-        else
-            echo "✅ 配置加载成功。"
-        fi
-    fi
+    private_key=$(get_state_value "PrivateKey" "$xray_key_file")
+    public_key=$(get_state_value "PublicKey" "$xray_key_file")
+    uuid=$(get_state_value "uuid" "$xray_key_file")
+    [ -n "$uuid" ] || uuid=$(get_state_value "uuid1" "$xray_key_file")
+    sid=$(get_state_value "sid" "$xray_key_file")
+    [ -n "$sid" ] || sid=$(get_state_value "sid1" "$xray_key_file")
+    xhttp_path=$(get_state_value "xhttp_path" "$xray_key_file")
 
-    if [ ! -f "$xray_key_file" ]; then
-        echo "生成新的 Xray 配置..."
-        xray x25519 | sed 's/Password (PublicKey):/PublicKey:/g' > $xray_key_file
-        PrivateKey=$(cat $xray_key_file | grep "PrivateKey:" | awk '{print $2}')
-        if [ -z "$PrivateKey" ]; then
-            echo "❌ 错误: 无法获取 Privatekey。请检查 Xray 是否安装成功。"
+    if [ -z "$private_key" ] || [ -z "$public_key" ]; then
+        echo "正在生成新的 Xray Reality 密钥..."
+        reality_output=$(xray x25519 | sed 's/Password (PublicKey):/PublicKey:/g')
+        private_key=$(printf '%s\n' "$reality_output" | awk -F': *' '/PrivateKey/ {print $2; exit}')
+        public_key=$(printf '%s\n' "$reality_output" | awk -F': *' '/PublicKey/ {print $2; exit}')
+        if [ -z "$private_key" ] || [ -z "$public_key" ]; then
+            echo "❌ 错误: 无法获取 Xray Reality 密钥。请检查 Xray 是否安装成功。"
             return 1
         fi
-        echo "✅ 已生成 Privatekey。"
-
-        uuid1=$(xray uuid)
-        uuid2=$(xray uuid)
-        sid1=$(openssl rand -hex 4)
-        sid2=$(openssl rand -hex 4)
-        xhttp_path=$(openssl rand -hex 5)
-
-        echo "✅ 已生成 UUID 和 ShortIds。"
-        echo "正在保存配置到 $xray_key_file..."
-        {
-            echo "uuid1:$uuid1"
-            echo "uuid2:$uuid2"
-            echo "sid1:$sid1"
-            echo "sid2:$sid2"
-            echo "xhttp_path:$xhttp_path"
-        } >> "$xray_key_file"
-        echo "✅ 配置已保存。"
+        set_state_value "PrivateKey" "$private_key" "$xray_key_file"
+        set_state_value "PublicKey" "$public_key" "$xray_key_file"
+        echo "✅ 已生成 Xray Reality 密钥。"
     fi
+    if [ -z "$uuid" ]; then
+        uuid=$(xray uuid)
+        set_state_value "uuid" "$uuid" "$xray_key_file"
+    fi
+    if [ -z "$sid" ]; then
+        sid=$(openssl rand -hex 4)
+        set_state_value "sid" "$sid" "$xray_key_file"
+    fi
+    if [ -z "$xhttp_path" ]; then
+        xhttp_path=$(openssl rand -hex 5)
+        set_state_value "xhttp_path" "$xhttp_path" "$xray_key_file"
+    fi
+    set_state_value "uuid" "$uuid" "$xray_key_file"
+    set_state_value "sid" "$sid" "$xray_key_file"
+    set_state_value "xhttp_path" "$xhttp_path" "$xray_key_file"
+    remove_state_keys "$xray_key_file" uuid1 uuid2 sid1 sid2
+    echo "✅ Xray 配置密钥已准备好: $xray_key_file"
 
     # 询问用户选择 REALITY 目标网站
     local reality_target reality_server_names
@@ -1356,11 +1427,7 @@ install_xray() {
       "settings": {
         "clients": [
           {
-            "id": "$uuid1", // xray uuid
-            "flow": "xtls-rprx-vision"
-          },
-          {
-            "id": "$uuid2",
+            "id": "$uuid", // xray uuid
             "flow": "xtls-rprx-vision"
           }
         ],
@@ -1380,14 +1447,13 @@ install_xray() {
           "serverNames": [
 $reality_server_names
           ],
-          "privateKey": "$PrivateKey", // xray x25519
+          "privateKey": "$private_key", // xray x25519
           "minClientVer": "",
           "maxClientVer": "",
           "maxTimeDiff": 0,
           "shortIds": [
             //"",    // 若有此项，客户端 shortId 可为空
-            "$sid1", // 0 到 f，长度为 2 的倍数，长度上限为 16
-            "$sid2"
+            "$sid" // 0 到 f，长度为 2 的倍数，长度上限为 16
           ]
         }
       },
@@ -1502,14 +1568,7 @@ EOF
     local clean_target=${extracted_target%:*}
 
     if [ -n "$clean_target" ]; then
-        # 检查 xray.key 中是否已经存在 target 行
-        if grep -q "^target:" "$xray_key_file"; then
-            # 如果存在，替换它
-            sed -i "s/^target:.*/target:$clean_target/" "$xray_key_file"
-        else
-            # 如果不存在，追加它
-            echo "target:$clean_target" >> "$xray_key_file"
-        fi
+        set_state_value "target" "$clean_target" "$xray_key_file"
         echo "✅ 已提取并保存 target 域名到 xray.key: $clean_target"
     else
         echo "⚠️ 警告: 未能从配置文件中提取到 target 域名。"
@@ -1546,12 +1605,8 @@ EOF
     fi
 
     # 3. 将 IP 保存到 xray.key
-    # 先删除旧的记录 (如果有)
-    sed -i '/^ipv4:/d' "$xray_key_file"
-    sed -i '/^ipv6:/d' "$xray_key_file"
-
-    echo "ipv4:$ip_v4" >> "$xray_key_file"
-    echo "ipv6:$ip_v6" >> "$xray_key_file"
+    set_state_value "ipv4" "$ip_v4" "$xray_key_file"
+    set_state_value "ipv6" "$ip_v6" "$xray_key_file"
 
     echo "✅ IP 信息已更新到 $xray_key_file"
     echo "   IPv4: ${ip_v4:-[无]}"
@@ -1579,11 +1634,7 @@ EOF
     echo "正在生成 VLESS 链接二维码 (可用于 Shadowrocket 导入)..."
     if command -v qrencode &> /dev/null; then
         # 从xray.key读取必要参数
-        local PublicKey
-        PublicKey=$(grep "PublicKey" "$xray_key_file" | awk '{print $NF}')
-        local target
-        target=$(grep "^target:" "$xray_key_file" | cut -d: -f2)
-        local sni="${target:-www.microsoft.com}"
+        local sni="${clean_target:-www.microsoft.com}"
         local xray_subdomain=""
         local vless_tag=""
         if [ -f "$domain_file" ]; then
@@ -1593,12 +1644,12 @@ EOF
 
         # 构建 VLESS 链接
         # 格式: vless://UUID@地址:端口?参数#备注名
-        local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${PublicKey}&sid=${sid1}&type=tcp&headerType=none&tfo=1"
+        local vless_params="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=safari&pbk=${public_key}&sid=${sid}&type=tcp&headerType=none&tfo=1"
 
         if [ -n "$ip_v4" ]; then
             if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
                 # 注意：即使 Xray 监听 6443，客户端连接的仍是 Nginx 的 443，所以这里端口填 443 是正确的
-                local vless_v4="vless://${uuid1}@${ip_v4}:443?${vless_params}#${vless_tag}"
+                local vless_v4="vless://${uuid}@${ip_v4}:443?${vless_params}#${vless_tag}"
                 echo ""
                 echo "📱 IPv4 VLESS 链接二维码 (Shadowrocket):"
                 echo "$vless_v4" | qrencode -t UTF8
@@ -1614,7 +1665,7 @@ EOF
         echo ""
 
         if [ -n "$ip_v6" ]; then
-            local vless_v6="vless://${uuid1}@[${ip_v6}]:443?${vless_params}#${vless_tag}"
+            local vless_v6="vless://${uuid}@[${ip_v6}]:443?${vless_params}#${vless_tag}"
             echo "📱 IPv6 VLESS 链接二维码 (Shadowrocket):"
             echo "$vless_v6" | qrencode -t UTF8
             echo ""
