@@ -31,8 +31,7 @@ ORIGINAL_HAS_IPV6=false
 check_ipv4_status() {
     echo "---"
     echo "正在检测初始系统 IPv4 状态..."
-    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
-       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+    if has_ipv4_connectivity; then
         echo "✅ 检测到系统已有原生 IPv4 出口。"
         ORIGINAL_HAS_IPV4=true
     else
@@ -44,8 +43,7 @@ check_ipv4_status() {
 check_ipv6_status() {
     echo "---"
     echo "正在检测初始系统 IPv6 状态..."
-    if curl -6 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
-       curl -6 -s --connect-timeout 2 https://2606:4700:4700::1111 >/dev/null 2>&1; then
+    if has_ipv6_connectivity; then
         echo "✅ 检测到系统已有原生 IPv6 出口。"
         ORIGINAL_HAS_IPV6=true
     else
@@ -73,6 +71,42 @@ fq_script_dir=$(cd "$(dirname "$fq_script_path")" >/dev/null 2>&1 && pwd -P)
 if [ -n "$fq_script_dir" ]; then
     fq_script_path="$fq_script_dir/$(basename "$fq_script_path")"
 fi
+
+has_ipv4_connectivity() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl -4 -s --connect-timeout 2 --max-time 5 https://www.google.com >/dev/null 2>&1 || \
+        curl -4 -s --connect-timeout 2 --max-time 5 https://1.1.1.1 >/dev/null 2>&1
+}
+
+has_ipv6_connectivity() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl -6 -s --connect-timeout 2 --max-time 5 https://www.google.com >/dev/null 2>&1 || \
+        curl -6 -s --connect-timeout 2 --max-time 5 'https://[2606:4700:4700::1111]' >/dev/null 2>&1
+}
+
+get_public_ipv4() {
+    local ip=""
+
+    if command -v curl >/dev/null 2>&1; then
+        ip=$(curl -4 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || true)
+    fi
+    if [ -z "$ip" ] && command -v dig >/dev/null 2>&1; then
+        ip=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+    fi
+    printf '%s' "$ip"
+}
+
+get_public_ipv6() {
+    local ip=""
+
+    if command -v curl >/dev/null 2>&1; then
+        ip=$(curl -6 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || true)
+    fi
+    if [ -z "$ip" ] && command -v dig >/dev/null 2>&1; then
+        ip=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+    fi
+    printf '%s' "$ip"
+}
 
 get_state_value() {
     local key="$1"
@@ -964,8 +998,7 @@ add_ipv4_by_warp() {
     echo "正在检查系统IPv4连接..."
     echo "---"
 
-    if curl -4 -s --connect-timeout 2 https://www.google.com >/dev/null 2>&1 || \
-       curl -4 -s --connect-timeout 2 https://1.1.1.1 >/dev/null 2>&1; then
+    if has_ipv4_connectivity; then
         echo "✅ 检测到系统已有 IPv4 出口，无需配置 WARP。"
         return 0
     else
@@ -1060,7 +1093,7 @@ add_ipv4_by_warp() {
     fi
 
     echo "正在验证连接..."
-    if ! curl -4 -s --connect-timeout 5 https://1.1.1.1 >/dev/null; then
+    if ! has_ipv4_connectivity; then
         echo "❌ WARP 启动后无法访问 IPv4，正在回滚..."
         sudo wg-quick down wgcf-profile.conf
         return 1
@@ -1078,7 +1111,7 @@ add_ipv4_by_warp() {
     sleep 3
     echo "---"
     echo "正在再次检查 IPv4 连接..."
-    if curl -4 -s --connect-timeout 3 https://1.1.1.1 >/dev/null; then
+    if has_ipv4_connectivity; then
         echo "✅✅ WARP 启动成功！系统现在拥有了 IPv4 访问能力。"
     else
         echo "❌ WARP 启动似乎成功，但无法访问 IPv4 网络。"
@@ -1396,11 +1429,11 @@ EOF
         return 1
     fi
 
-    if command -v dig >/dev/null 2>&1 && [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
-        ip_v4=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+    if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
+        ip_v4=$(get_public_ipv4)
     fi
-    if command -v dig >/dev/null 2>&1 && [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
-        ip_v6=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+    if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
+        ip_v6=$(get_public_ipv6)
     fi
     set_state_value "ipv4" "$ip_v4" "$sing_box_key_file"
     set_state_value "ipv6" "$ip_v6" "$sing_box_key_file"
@@ -1784,21 +1817,13 @@ EOF
     local ip_v4=""
     local ip_v6=""
 
-    # 1. 查询 IPv4 (dig @1.1.1.1)
-    # ch = Chaos class, txt = TXT record, whoami.cloudflare = magic domain
-    # tr -d '"' 用于去除结果中的引号
-    if command -v dig &> /dev/null; then
-        ip_v4=$(dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
-    fi
+    ip_v4=$(get_public_ipv4)
 
-    # 2. 查询 IPv6 (dig @2606:4700:4700::1111)
     if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
-        if command -v dig &> /dev/null; then
-            ip_v6=$(dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"')
-        fi
+        ip_v6=$(get_public_ipv6)
     fi
 
-    # 3. 将 IP 保存到 xray.key
+    # 将 IP 保存到 xray.key
     set_state_value "ipv4" "$ip_v4" "$xray_key_file"
     set_state_value "ipv6" "$ip_v6" "$xray_key_file"
 
@@ -2278,16 +2303,14 @@ main() {
                 local ip_v4=""
                 local ip_v6=""
                 if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
-                    ip_v4=$(curl -4 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || \
-                        dig -4 @1.1.1.1 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+                    ip_v4=$(get_public_ipv4)
                     if [ -z "$ip_v4" ]; then
                         echo "❌ 已检测到原生 IPv4，但无法获取公网 IPv4 地址，拒绝修改 DNS。"
                         return 1
                     fi
                 fi
                 if [ "$ORIGINAL_HAS_IPV6" = "true" ]; then
-                    ip_v6=$(curl -6 -fsS --connect-timeout 3 --max-time 8 ip.sb 2>/dev/null || \
-                        dig -6 @2606:4700:4700::1111 ch txt whoami.cloudflare +short 2>/dev/null | grep -v '^;' | tr -d '"' | head -n 1)
+                    ip_v6=$(get_public_ipv6)
                     if [ -z "$ip_v6" ]; then
                         echo "❌ 已检测到原生 IPv6，但无法获取公网 IPv6 地址，拒绝修改 DNS。"
                         return 1
@@ -2300,21 +2323,9 @@ main() {
                 configure_cloudflare_dns "$domain" "$subdomain" "$ip_v4" "$ip_v6" || return 1
                 apply_or_renew_cert "$subdomain" || return 1
             else
-                echo "---"
-                local manual_cert_domains=(-d "$domain" -d "*.$domain")
-                local cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
-                local cert_checksum_before=""
-                cert_checksum_before=$(get_cert_checksum "$cert_path")
-                echo "将使用 certbot 申请 $domain 和 *.$domain 的证书"
-                sudo certbot certonly \
-                    --manual \
-                    --preferred-challenges dns \
-                    --agree-tos \
-                    --no-eff-email \
-                    --cert-name "$domain" \
-                    "${manual_cert_domains[@]}" || return 1
-                echo "✅ 证书申请完成！"
-                handle_successful_cert_update "$domain" "$cert_checksum_before" || return 1
+                echo "❌ 当前自动流程只支持 Cloudflare DNS。"
+                echo "请将域名托管到 Cloudflare 后重新运行，或手动配置 DNS/证书/续期流程。"
+                return 1
             fi
 
             install_sing_box "$domain" "$subdomain" || return 1
