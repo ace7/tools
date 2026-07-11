@@ -1131,7 +1131,7 @@ install_sing_box() {
         return 1
     fi
     if [ -z "$domain" ]; then
-        domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
+        domain=$(derive_root_domain "$subdomain")
     fi
     ensure_tcp_fast_open || return 1
     ensure_proxy_firewall_ports
@@ -1886,7 +1886,7 @@ update_nginx_config() {
     if [ -z "$domain" ] || [ -z "$subdomain" ]; then
         if [ -f "$domain_file" ]; then
             subdomain=$(head -n 1 "$domain_file")
-            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
+            domain=$(derive_root_domain "$subdomain")
             echo "✅ 读取到域名：$domain，子域名：$subdomain"
         else
             read -p "无法自动读取域名，请输入您的子域名（如 sub.example.com）: " subdomain
@@ -1894,7 +1894,7 @@ update_nginx_config() {
                 echo "❌ 域名不能为空，退出。"
                 return 1
             fi
-            domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
+            domain=$(derive_root_domain "$subdomain")
         fi
     fi
     if ! sudo test -f "/etc/letsencrypt/live/$domain/fullchain.pem"; then
@@ -2260,7 +2260,7 @@ main() {
             done
 
             # 提取 domain 和 subdomain
-            domain=$(echo "$full_domain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
+            domain=$(derive_root_domain "$full_domain")
             subdomain=$full_domain
             prepare_sing_box_domains "$subdomain" || return 1
             local anytls_domain
