@@ -63,6 +63,16 @@ sing_box_key_file="$sing_box_dir/sing-box.key"
 cf_ini="$cert_dir/cf.ini"
 cf_api_base="https://api.cloudflare.com/client/v4"
 certbot_dns_propagation_seconds=120
+cert_renew_timezone="Asia/Singapore"
+cert_renew_hour=4
+cert_renew_window_days=7
+cert_renew_cron_file="/etc/cron.d/fq-cert-renew"
+cert_renew_log="/var/log/fq-cert-renew.log"
+fq_script_path="${BASH_SOURCE[0]}"
+fq_script_dir=$(cd "$(dirname "$fq_script_path")" >/dev/null 2>&1 && pwd -P)
+if [ -n "$fq_script_dir" ]; then
+    fq_script_path="$fq_script_dir/$(basename "$fq_script_path")"
+fi
 
 get_state_value() {
     local key="$1"
@@ -107,6 +117,186 @@ remove_state_keys() {
     ' "$file" > "$tmp_file"
     mv "$tmp_file" "$file"
     chmod 600 "$file"
+}
+
+derive_root_domain() {
+    local subdomain="$1"
+
+    echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}'
+}
+
+log_cert_renew() {
+    printf '[%s] %s\n' "$(TZ="$cert_renew_timezone" date '+%F %T %Z')" "$*"
+}
+
+get_cert_checksum() {
+    local cert_path="$1"
+
+    sudo sha256sum "$cert_path" 2>/dev/null | awk '{print $1}'
+}
+
+ensure_cron_service() {
+    if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl list-unit-files cron.service 2>/dev/null | grep -q '^cron\.service'; then
+            echo "正在安装 cron..."
+            sudo apt-get update
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y cron
+        fi
+        if ! sudo systemctl enable --now cron >/dev/null 2>&1; then
+            echo "⚠️ cron 服务启动失败，请手动检查 systemctl status cron。"
+            return 1
+        fi
+    elif command -v service >/dev/null 2>&1; then
+        sudo service cron start >/dev/null 2>&1 || {
+            echo "⚠️ cron 服务启动失败，请手动检查 service cron status。"
+            return 1
+        }
+    fi
+}
+
+restart_cert_dependent_services() {
+    local service=""
+    local failed=false
+
+    for service in nginx sing-box; do
+        if sudo systemctl is-active --quiet "$service" 2>/dev/null; then
+            log_cert_renew "证书已更新，正在重启 $service..."
+            if sudo systemctl restart "$service"; then
+                log_cert_renew "$service 重启成功。"
+            else
+                log_cert_renew "ERROR: $service 重启失败，请检查 systemctl status $service。"
+                failed=true
+            fi
+        else
+            log_cert_renew "$service 未处于运行状态，跳过重启。"
+        fi
+    done
+
+    [ "$failed" = "false" ]
+}
+
+handle_successful_cert_update() {
+    local domain="$1"
+    local cert_checksum_before="$2"
+    local cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
+    local cert_checksum_after=""
+
+    configure_cert_renewal_cron "$domain" || return 1
+
+    cert_checksum_after=$(get_cert_checksum "$cert_path")
+    if [ -n "$cert_checksum_after" ] && [ "$cert_checksum_after" != "$cert_checksum_before" ]; then
+        echo "✅ 检测到证书文件已更新，检查是否需要重启 nginx 和 sing-box..."
+        restart_cert_dependent_services || return 1
+    else
+        echo "✅ 证书文件未变化，无需重启 nginx 或 sing-box。"
+    fi
+}
+
+configure_cert_renewal_cron() {
+    local domain="$1"
+    local tmp_file=""
+    local escaped_script_path=""
+    local escaped_domain=""
+
+    if [ -z "$domain" ]; then
+        echo "❌ 无法配置证书续期 crontab：域名为空。"
+        return 1
+    fi
+    if [ ! -f "$fq_script_path" ]; then
+        echo "❌ 无法配置证书续期 crontab：未找到脚本 $fq_script_path。"
+        return 1
+    fi
+
+    ensure_cron_service || return 1
+    sudo touch "$cert_renew_log"
+    sudo chmod 640 "$cert_renew_log"
+
+    printf -v escaped_script_path '%q' "$fq_script_path"
+    printf -v escaped_domain '%q' "$domain"
+    tmp_file=$(mktemp)
+    cat > "$tmp_file" <<EOF
+# FQ certificate renewal. Managed by $fq_script_path
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TZ=$cert_renew_timezone
+# Cron timezone support differs by implementation, so guard execution by Singapore hour.
+0 * * * * root if [ "\$(TZ=$cert_renew_timezone date +\\%H)" = "$(printf '%02d' "$cert_renew_hour")" ]; then /bin/bash $escaped_script_path --renew-cert-if-needed $escaped_domain; fi >> $cert_renew_log 2>&1
+EOF
+    sudo install -m 644 "$tmp_file" "$cert_renew_cron_file"
+    rm -f "$tmp_file"
+
+    echo "✅ 已配置证书自动续期 crontab: $cert_renew_cron_file"
+    echo "   执行时间: 每天 $cert_renew_timezone 04:00；脚本仅在证书剩余 <= ${cert_renew_window_days} 天时续期。"
+    echo "   日志文件: $cert_renew_log"
+}
+
+renew_cert_if_needed() {
+    local subdomain="$1"
+    local domain=""
+    local cert_path=""
+    local cert_checksum_before=""
+    local cert_checksum_after=""
+    local expires_text=""
+    local expires_epoch=""
+    local now_epoch=""
+    local days_left=""
+    local should_renew=false
+    local reason=""
+
+    log_cert_renew "开始检查证书续期。"
+
+    if [ -z "$subdomain" ] && [ -f "$domain_file" ]; then
+        subdomain=$(head -n 1 "$domain_file")
+    fi
+    if [ -z "$subdomain" ]; then
+        log_cert_renew "ERROR: 未找到子域名，无法判断需要续期的证书。"
+        return 1
+    fi
+
+    domain=$(derive_root_domain "$subdomain")
+    cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
+    if ! sudo test -f "$cert_path"; then
+        log_cert_renew "ERROR: 未找到证书文件 $cert_path。"
+        return 1
+    fi
+
+    expires_text=$(sudo openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+    expires_epoch=$(date -d "$expires_text" +%s 2>/dev/null)
+    now_epoch=$(date +%s)
+    if [ -z "$expires_epoch" ]; then
+        log_cert_renew "ERROR: 无法解析证书到期时间: $expires_text。"
+        return 1
+    fi
+
+    days_left=$(( (expires_epoch - now_epoch + 86399) / 86400 ))
+    log_cert_renew "证书: $domain；到期时间: $expires_text；剩余天数: $days_left。"
+
+    if [ "$days_left" -le "$cert_renew_window_days" ]; then
+        should_renew=true
+        reason="证书剩余天数 <= ${cert_renew_window_days}"
+    fi
+
+    if [ "$should_renew" != "true" ]; then
+        log_cert_renew "无需续期：证书剩余天数大于 ${cert_renew_window_days}。"
+        return 0
+    fi
+
+    cert_checksum_before=$(get_cert_checksum "$cert_path")
+    log_cert_renew "触发 certbot renew，原因：$reason。"
+    if ! sudo env PYTHONWARNINGS=ignore::PendingDeprecationWarning certbot renew \
+        --cert-name "$domain" \
+        --non-interactive; then
+        log_cert_renew "ERROR: certbot renew 执行失败。"
+        return 1
+    fi
+
+    cert_checksum_after=$(get_cert_checksum "$cert_path")
+    if [ -n "$cert_checksum_after" ] && [ "$cert_checksum_after" != "$cert_checksum_before" ]; then
+        log_cert_renew "证书文件已更新。"
+        restart_cert_dependent_services || return 1
+    else
+        log_cert_renew "certbot 执行完成，证书文件未变化，无需重启服务。"
+    fi
 }
 
 prepare_sing_box_domains() {
@@ -697,6 +887,8 @@ apply_or_renew_cert() {
     local subdomain=""
     local domain=""
     local cert_domains=()
+    local cert_path=""
+    local cert_checksum_before=""
 
     echo "---"
     echo "开始为您的域名申请泛域名证书"
@@ -734,8 +926,10 @@ apply_or_renew_cert() {
             fi
         fi
     fi
-    domain=$(echo "$subdomain" | awk -F. '{if (NF>2) { if ($0 ~ /\.(com\.cn|net\.cn|org\.cn|gov\.cn|edu\.cn|ac\.cn|eu\.org|co\.uk|org\.uk|me\.uk)$/) {print $(NF-2)"."$(NF-1)"."$NF} else {print $(NF-1)"."$NF} } else {print $0}}')
+    domain=$(derive_root_domain "$subdomain")
     cert_domains=(-d "$domain" -d "*.$domain")
+    cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
+    cert_checksum_before=$(get_cert_checksum "$cert_path")
 
     echo "---"
     echo "正在使用 Certbot 申请证书..."
@@ -752,6 +946,7 @@ apply_or_renew_cert() {
     if [ $? -eq 0 ]; then
         echo ""
         echo "✅ 证书申请成功！证书文件已保存在 /etc/letsencrypt/live/$domain/ 目录下。"
+        handle_successful_cert_update "$domain" "$cert_checksum_before" || return 1
     else
         echo ""
         echo "❌ 证书申请失败。请检查您的域名、API Token 以及 DNS 配置。"
@@ -2108,6 +2303,9 @@ main() {
             else
                 echo "---"
                 local manual_cert_domains=(-d "$domain" -d "*.$domain")
+                local cert_path="/etc/letsencrypt/live/$domain/fullchain.pem"
+                local cert_checksum_before=""
+                cert_checksum_before=$(get_cert_checksum "$cert_path")
                 echo "将使用 certbot 申请 $domain 和 *.$domain 的证书"
                 sudo certbot certonly \
                     --manual \
@@ -2117,6 +2315,7 @@ main() {
                     --cert-name "$domain" \
                     "${manual_cert_domains[@]}" || return 1
                 echo "✅ 证书申请完成！"
+                handle_successful_cert_update "$domain" "$cert_checksum_before" || return 1
             fi
 
             install_sing_box "$domain" "$subdomain" || return 1
@@ -2134,6 +2333,14 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    case "${1:-}" in
+        --renew-cert-if-needed)
+            check_system
+            renew_cert_if_needed "${2:-}"
+            exit $?
+            ;;
+    esac
+
     check_system
     check_ipv4_status
     check_ipv6_status
