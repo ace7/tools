@@ -1436,10 +1436,9 @@ EOF
     [ -n "$hy2_link" ] && generate_connection_qr "Hysteria2" "$hy2_link" "$sing_box_dir/hy2.png"
 
     full_info=$(cat <<EOF
-FQ VPS
+# Summary
 IPv4: ${ip_v4:-无}
 IPv6: ${ip_v6:-无}
-Domain: ${domain:-无}
 Subdomain: ${subdomain:-无}
 AnyTLS domain: ${anytls_domain:-无}
 Hysteria2 domain: ${hy2_domain:-无}
