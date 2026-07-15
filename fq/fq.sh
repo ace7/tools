@@ -53,7 +53,8 @@ check_ipv6_status() {
 }
 
 fq_dir="$HOME/gfw"
-packages="ca-certificates curl dnsutils openssl wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full tmux qrencode vim less iptables-persistent"
+packages="ca-certificates curl dnsutils openssl wireguard certbot python3-certbot-dns-cloudflare jq cron nginx-full qrencode less iptables-persistent"
+home_setup_url="https://tools.dp28.eu.org/fq/setup-home.sh"
 cert_dir="$fq_dir/cf_cert"
 domain_file="$cert_dir/domain.txt"
 sing_box_dir="$fq_dir/sing-box"
@@ -779,6 +780,30 @@ ensure_proxy_firewall_ports() {
     echo "✅ IPv4 TCP/UDP 443 已放行并持久化。"
 }
 
+run_home_setup() {
+    local setup_script=""
+
+    setup_script=$(mktemp) || {
+        echo "❌ 无法创建临时文件，跳过 Home 环境配置。"
+        return 1
+    }
+
+    echo "正在从 $home_setup_url 下载 Home 环境配置脚本..."
+    if ! curl -fsSL "$home_setup_url" -o "$setup_script"; then
+        echo "❌ 下载 Home 环境配置脚本失败。"
+        rm -f "$setup_script"
+        return 1
+    fi
+
+    if ! bash "$setup_script" "$@"; then
+        echo "❌ Home 环境配置失败。"
+        rm -f "$setup_script"
+        return 1
+    fi
+
+    rm -f "$setup_script"
+}
+
 install_pkgs_and_setup_env() {
     echo "---"
     echo "开始安装必要的软件包: $packages"
@@ -811,106 +836,9 @@ install_pkgs_and_setup_env() {
     echo "✅ nginx 版本检查通过: $nginx_ver >= 1.25.1"
 
     echo "---"
-    echo "设置系统环境"
+    echo "设置 Home 环境"
     echo "---"
-    if grep -q "ss_port" "$HOME/.bashrc"; then
-        echo "✅ .bashrc 环境似乎已配置过，跳过写入。"
-    else
-        echo "正在配置 .bashrc..."
-        cat <<'EOF' >> $HOME/.bashrc
-alias ll='ls -l'
-alias t='tmux a -t 0'
-alias tailf='tail -f'
-export SYSTEMD_EDITOR=vim
-ss_port() {
-    if [ -z "$1" ]; then
-        echo "错误：请传入一个端口号。"
-        return 1
-    fi
-
-    # 使用正则表达式检查是否为纯数字
-    if ! [[ "$1" =~ ^[0-9]+$ ]]; then
-        echo "错误：'$1' 不是一个有效的数字。"
-        return 1
-    fi
-
-    if [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; then
-        sudo ss -ltnp "sport = :$1"
-    else
-        echo "错误：端口号 '$1' 必须在1到65535之间。"
-        return 1
-    fi
-}
-EOF
-    fi
-    cat <<EOF > $HOME/.inputrc
-"\e[A":history-search-backward
-"\e[B":history-search-forward
-EOF
-    cat <<EOF > $HOME/.vimrc
-syntax enable
-set nu
-set autoindent
-set expandtab
-set tabstop=4
-set shiftwidth=4
-set backspace=indent,eol,start
-set mouse=a
-EOF
-    cat <<EOF > $HOME/.tmux.conf
-set-option -g display-time 1000		# msg display time, 1000 ms
-
-set-option -g prefix C-j
-unbind-key C-b
-bind-key C-j send-prefix
-
-bind r source-file ~/.tmux.conf \; display "Reloaded!"	    # reload config file
-
-bind c new-window -c "#{pane_current_path}"
-bind | split-window -h -c "#{pane_current_path}"    # horizontal
-bind - split-window -v -c "#{pane_current_path}"    # vertical
-bind h select-pane -L
-bind j select-pane -D
-bind k select-pane -U
-bind l select-pane -R
-bind -r H resize-pane -L 5  # if want to expand large space, press H several times
-bind -r J resize-pane -D 5
-bind -r K resize-pane -U 5
-bind -r L resize-pane -R 5
-
-set -g default-terminal "screen-256color"
-set -g status-fg white
-set -g status-bg black
-
-set -g status-style bright
-
-# default window title colors
-set-window-option -g window-status-style fg=cyan
-set-window-option -g window-status-style bg=default
-set-window-option -g window-status-style dim
-
-# active window title colors
-set-window-option -g window-status-current-style fg=white
-set-window-option -g window-status-current-style bg=red
-set-window-option -g window-status-current-style bright
-
-# Highlight active window
-set-window-option -g window-status-current-style bg=red
-
-#setw -g window-status-fg cyan
-#setw -g window-status-bg default
-#setw -g window-status-attr dim
-#setw -g window-status-current-fg white
-#setw -g window-status-current-bg red
-#setw -g window-status-current-attr bright
-#setw -g mode-mouse on
-#set -g mouse-select-pane on
-#set -g mouse-select-window on
-#set -g mouse-resize-pane on
-set -g status-left "#[fg=green][#S]"
-set -g status-right "#[fg=cyan]#H %d-%b %R"
-set -g status-interval 60   # update time every 60 sec
-EOF
+    run_home_setup || return 1
 }
 
 # ---
@@ -1039,9 +967,9 @@ add_ipv4_by_warp() {
     echo "✅ 已在 ~/bin 目录创建 wgcf 软链接。"
 
     if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
-        echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+        run_home_setup --ensure-bin-path || return 1
+        export PATH="$bin_dir:$PATH"
         echo "⚠️ ~/bin 已添加到 PATH，请重新启动终端或执行 'source ~/.bashrc' 使其生效。"
-        source "$HOME/.bashrc"
     fi
 
     echo "---"
