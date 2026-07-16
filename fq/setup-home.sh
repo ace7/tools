@@ -128,14 +128,132 @@ EOF
 
 configure_vim() {
     cat > "$HOME/.vimrc" <<'EOF'
-syntax enable
-set nu
-set autoindent
-set expandtab
-set tabstop=4
-set shiftwidth=4
-set backspace=indent,eol,start
+"call plug#begin('~/.vim/plug')
+"Plug 'NLKNguyen/papercolor-theme'
+"Plug 'altercation/vim-colors-solarized'
+"Plug 'Yggdroot/LeaderF', { 'do': ':LeaderfInstallCExtension'}
+"Plug 'preservim/nerdtree'
+"call plug#end()
+
+"let g:Lf_WindowPosition = 'popup'
+"let g:Lf_ShortcutF = '<c-p>'
+"let g:Lf_ShortcutB = '<c-b>'
+"noremap <c-n> :LeaderfMru<cr>
+"noremap <m-p> :LeaderfFunction!<cr>
+"noremap <c-b> :LeaderfBuffer<cr>
+"noremap <m-m> :LeaderfTag<cr>
+"noremap <c-f> :LeaderfFile<cr>
+"let g:Lf_StlSeparator = { 'left': '', 'right': '', 'font': '' }
+"let g:Lf_RootMarkers = ['.project', '.root', '.svn', '.git']
+"let g:Lf_WorkingDirectoryMode = 'Ac'
+"let g:Lf_WindowHeight = 0.30
+"let g:Lf_CacheDirectory = expand('~/.vim/cache')
+"let g:Lf_ShowRelativePath = 0
+"let g:Lf_HideHelp = 1
+"let g:Lf_StlColorscheme = 'powerline'
+"let g:Lf_PreviewResult = {'Function':0, 'BufTag':0}
+
+" === System & Environment ===
+language messages en_US.UTF-8
+set history=500
+set tm=500
+set noerrorbells
+set novisualbell
+set t_vb=
 set mouse=a
+set laststatus=2
+set wildmode=longest,list,full
+
+" === Directories (auto-create if missing) ===
+let s:vim_tmp = expand('~/tmp/vim')
+if !isdirectory(s:vim_tmp)
+  call mkdir(s:vim_tmp, 'p')
+endif
+set backup
+set backupdir=~/tmp/vim
+set directory=~/tmp/vim
+
+" === Encoding ===
+set encoding=utf-8
+
+" === File Type Detection ===
+filetype plugin on
+filetype indent on
+
+" === Appearance ===
+syntax enable
+syntax sync minlines=256 maxlines=1000
+
+if has('termguicolors')
+  set termguicolors
+endif
+
+function! s:DetectBg() abort
+  if $TERM_PROGRAM ==# 'iTerm.app'
+    return 'dark'
+  endif
+  let l:cfg = expand('~/.config/ghostty/config')
+  if $TERM_PROGRAM !=# 'ghostty' || !filereadable(l:cfg)
+    return &background
+  endif
+  let l:theme = get(filter(readfile(l:cfg), 'v:val =~# "^\\s*theme\\s*="'), 0, '')
+  return l:theme =~? '\<light\>\|latte' ? 'light' : 'dark'
+endfunction
+let &background = s:DetectBg()
+
+let g:solarized_termtrans=1
+colo solarized
+
+" === Editing Behavior ===
+set backspace=eol,start,indent
+set expandtab
+set smarttab
+set shiftwidth=4
+set tabstop=4
+set ai
+set si
+
+" === Search & Highlight ===
+set hlsearch
+set incsearch
+set showmatch
+
+" === Display ===
+set nu
+set cursorline
+set scrolloff=5
+
+" === Status Line ===
+set statusline=%#LineNr#\ %f%m\%=%#CursorColumn#\ %y\ %{&fileencoding?&fileencoding:&encoding}\ [%{&fileformat}\]\ %l/%L:%c\
+
+" === Cursor Shape (xterm-compatible terminals only) ===
+if &term =~? 'xterm\|alacritty\|kitty\|ghostty\|iTerm\|vte\|gnome'
+  let &t_SI = "\e[6 q"    " Insert mode: 竖线
+  let &t_SR = "\e[4 q"    " Replace mode: 下划线
+  let &t_EI = "\e[2 q"    " Normal mode: 方块
+endif
+
+" === Key Mappings ===
+nmap 0 ^
+nmap <space> <C-D>
+set clipboard+=unnamed
+
+" === Auto Commands ===
+augroup AutoCd
+  autocmd!
+  autocmd BufEnter * silent! lcd %:p:h
+augroup END
+
+augroup RestoreCursor
+  autocmd!
+  autocmd BufReadPost * if line("'\"") > 0 && line("'\"") <= line("$") | exe "normal! g`\"" | endif
+augroup END
+
+augroup DisplayUpdate
+  autocmd!
+  autocmd WinEnter * setlocal cursorline
+  autocmd WinLeave * setlocal nocursorline
+augroup END
 EOF
 }
 
