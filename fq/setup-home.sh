@@ -237,6 +237,7 @@ endif
 nmap 0 ^
 nmap <space> <C-D>
 set clipboard+=unnamed
+ca w!! w !sudo tee "%"
 
 " === Auto Commands ===
 augroup AutoCd
