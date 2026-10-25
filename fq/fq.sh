@@ -1080,6 +1080,8 @@ install_sing_box() {
     local hy2_tag=""
     local installer_file=""
     local full_info=""
+    local dns_strategy="prefer_ipv6"
+    local resolver_tag="cf6"
 
     if [ -z "$subdomain" ] && [ -f "$domain_file" ]; then
         subdomain=$(head -n 1 "$domain_file")
@@ -1188,6 +1190,15 @@ install_sing_box() {
         set_state_value "hy2_password" "$hy2_password" "$sing_box_key_file"
     fi
 
+    # 出站地址族按本机原生 IPv4 能力选择: 原生双栈/仅 IPv4 用 prefer_ipv4, 仅 IPv6 用 prefer_ipv6
+    if [ "$ORIGINAL_HAS_IPV4" = "true" ]; then
+        dns_strategy="prefer_ipv4"
+        resolver_tag="cf4"
+    fi
+    echo "   DNS/出站策略: ${dns_strategy} (默认解析服务器 ${resolver_tag})"
+
+    # 服务端只做"中转": 默认全部直连, 阻断私网与 CN 目标;
+    # 例外白名单为 geosite-cn(cn 列表包含 google-cn) 的 Google/Apple CN 域名, 否则这些域名会被下方 CN 规则阻断。
     cat > "$config_file" <<EOF
 {
   "log": {
@@ -1198,12 +1209,22 @@ install_sing_box() {
   "dns": {
     "servers": [
       {
-        "tag": "cf",
+        "tag": "cf4",
+        "type": "tls",
+        "server": "1.1.1.1"
+      },
+      {
+        "tag": "cf6",
         "type": "tls",
         "server": "2606:4700:4700::1111"
       },
       {
-        "tag": "google",
+        "tag": "google4",
+        "type": "tls",
+        "server": "8.8.8.8"
+      },
+      {
+        "tag": "google6",
         "type": "tls",
         "server": "2001:4860:4860::8888"
       }
@@ -1211,24 +1232,37 @@ install_sing_box() {
   },
   "route": {
     "default_domain_resolver": {
-      "server": "cf",
-      "strategy": "prefer_ipv6"
+      "server": "$resolver_tag",
+      "strategy": "$dns_strategy"
     },
+    "final": "outbound-direct",
     "rules": [
       {
-        "outbound": "block",
-        "rule_set": "geoip-cn"
-      },
-      {
-        "outbound": "block",
-        "rule_set": "geosite-cn"
+        "outbound": "outbound-direct",
+        "domain_suffix": [
+          "gstatic.com",
+          "ampproject.org",
+          "gvt1.com",
+          "gvt2.com",
+          "google.cn",
+          "googleapis.cn",
+          "googleusercontent.com",
+          "ggpht.com",
+          "googlevideo.com",
+          "ytimg.com",
+          "gs-loc-cn.apple.com"
+        ]
       },
       {
         "outbound": "block",
         "ip_is_private": true
       },
       {
-        "outbound": "outbound-direct"
+        "outbound": "block",
+        "rule_set": [
+          "geoip-cn",
+          "geosite-cn"
+        ]
       }
     ],
     "rule_set": [
@@ -1237,14 +1271,16 @@ install_sing_box() {
         "type": "remote",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-        "download_detour": "outbound-direct"
+        "download_detour": "outbound-direct",
+        "update_interval": "7d"
       },
       {
         "tag": "geosite-cn",
         "type": "remote",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-        "download_detour": "outbound-direct"
+        "download_detour": "outbound-direct",
+        "update_interval": "7d"
       }
     ]
   },

@@ -8,12 +8,22 @@
     "dns": {
         "servers": [
             {
-                "tag": "cf",
+                "tag": "cf4",
+                "type": "tls",
+                "server": "1.1.1.1"
+            },
+            {
+                "tag": "cf6",
                 "type": "tls",
                 "server": "2606:4700:4700::1111"
             },
             {
-                "tag": "google",
+                "tag": "google4",
+                "type": "tls",
+                "server": "8.8.8.8"
+            },
+            {
+                "tag": "google6",
                 "type": "tls",
                 "server": "2001:4860:4860::8888"
             }
@@ -21,24 +31,37 @@
     },
     "route": {
         "default_domain_resolver": {
-            "server": "cf",
-            "strategy": "prefer_ipv6"
+            "server": "cf4",
+            "strategy": "prefer_ipv4"
         },
+        "final": "outbound-direct",
         "rules": [
             {
-                "outbound": "block",
-                "rule_set": "geoip-cn"
-            },
-            {
-                "outbound": "block",
-                "rule_set": "geosite-cn"
+                "outbound": "outbound-direct",
+                "domain_suffix": [
+                    "gstatic.com",
+                    "ampproject.org",
+                    "gvt1.com",
+                    "gvt2.com",
+                    "google.cn",
+                    "googleapis.cn",
+                    "googleusercontent.com",
+                    "ggpht.com",
+                    "googlevideo.com",
+                    "ytimg.com",
+                    "gs-loc-cn.apple.com"
+                ]
             },
             {
                 "outbound": "block",
                 "ip_is_private": true
             },
             {
-                "outbound": "outbound-direct"
+                "outbound": "block",
+                "rule_set": [
+                    "geoip-cn",
+                    "geosite-cn"
+                ]
             }
         ],
         "rule_set": [
@@ -47,14 +70,16 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-                "download_detour": "outbound-direct"
+                "download_detour": "outbound-direct",
+                "update_interval": "7d"
             },
             {
                 "tag": "geosite-cn",
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-                "download_detour": "outbound-direct"
+                "download_detour": "outbound-direct",
+                "update_interval": "7d"
             }
         ]
     },

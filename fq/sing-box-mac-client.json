@@ -281,6 +281,22 @@
         "outbound": "proxy"
       },
       {
+        "domain_suffix": [
+          "gstatic.com",
+          "ampproject.org",
+          "gvt1.com",
+          "gvt2.com",
+          "google.cn",
+          "googleapis.cn",
+          "googleusercontent.com",
+          "ggpht.com",
+          "googlevideo.com",
+          "ytimg.com"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      },
+      {
         "rule_set": "geosite-ads",
         "action": "reject"
       },
