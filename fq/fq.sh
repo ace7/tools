@@ -1198,7 +1198,7 @@ install_sing_box() {
     echo "   DNS/出站策略: ${dns_strategy} (默认解析服务器 ${resolver_tag})"
 
     # 服务端只做"中转": 默认全部直连, 阻断私网与 CN 目标;
-    # 例外白名单为 geosite-cn(cn 列表包含 google-cn) 的 Google/Apple CN 域名, 否则这些域名会被下方 CN 规则阻断。
+    # 例外白名单（Google/Apple CN 域名、老虎证券域名）需放在 CN 规则之前, 否则会被 geoip-cn/geosite-cn 阻断。
     cat > "$config_file" <<EOF
 {
   "log": {
@@ -1251,6 +1251,51 @@ install_sing_box() {
           "googlevideo.com",
           "ytimg.com",
           "gs-loc-cn.apple.com"
+        ]
+      },
+      {
+        "outbound": "outbound-direct",
+        "domain_suffix": [
+          "atigrpulse.com",
+          "atigrzen.com",
+          "etasphere.com",
+          "ftfast.com",
+          "gotigerhk.com",
+          "iotaskyt.com",
+          "iotaskyty.com",
+          "itiger-nz.com",
+          "itiger.com",
+          "itigergrowth.com",
+          "itigergrowtha.com",
+          "itigertrader.com",
+          "itigerup.com",
+          "laohu8.com",
+          "play-analytics.com",
+          "skytigris.cn",
+          "skytigris.com",
+          "thetigerbrokers.com",
+          "tigerbbs.cn",
+          "tigerbbs.com",
+          "tigerbrokers.com",
+          "tigerbrokers.com.au",
+          "tigerbrokers.com.hk",
+          "tigerbrokers.com.sg",
+          "tigerbrokers.nz",
+          "tigeresop.com",
+          "tigeresop.com.sg",
+          "tigerfintech.com",
+          "tigerhkgo.com",
+          "tigersecurities.com",
+          "tigertrader.app",
+          "tigr.link",
+          "tigrdw.com",
+          "tigrgood.com",
+          "tigrwd.com",
+          "tradeup.com",
+          "ttm.financial",
+          "xiaohu8.com",
+          "zhijianfengyi.cn",
+          "zhijianfengyi.com"
         ]
       },
       {
