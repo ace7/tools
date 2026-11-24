@@ -5,6 +5,12 @@
         "output": "box.log",
         "timestamp": true
     },
+    "http_clients": [
+        {
+            "tag": "direct-http",
+            "detour": "outbound-direct"
+        }
+    ],
     "dns": {
         "servers": [
             {
@@ -30,6 +36,7 @@
         ]
     },
     "route": {
+        "default_http_client": "direct-http",
         "default_domain_resolver": {
             "server": "cf4",
             "strategy": "prefer_ipv4"
@@ -115,7 +122,6 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-                "download_detour": "outbound-direct",
                 "update_interval": "7d"
             },
             {
@@ -123,7 +129,6 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-                "download_detour": "outbound-direct",
                 "update_interval": "7d"
             }
         ]
