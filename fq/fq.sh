@@ -1198,7 +1198,7 @@ install_sing_box() {
     echo "   DNS/出站策略: ${dns_strategy} (默认解析服务器 ${resolver_tag})"
 
     # 服务端只做"中转": 默认全部直连, 阻断私网与 CN 目标;
-    # 例外白名单（Google/Apple CN 域名、老虎证券域名）需放在 CN 规则之前, 否则会被 geoip-cn/geosite-cn 阻断。
+    # 例外白名单（Google CN 域名、老虎证券域名）需放在 CN 规则之前, 否则会被 geoip-cn/geosite-cn 阻断。
     cat > "$config_file" <<EOF
 {
   "log": {
@@ -1206,6 +1206,11 @@ install_sing_box() {
     "level": "info",
     "timestamp": true
   },
+  "http_clients": [
+    {
+      "tag": "direct-http"
+    }
+  ],
   "dns": {
     "servers": [
       {
@@ -1231,6 +1236,7 @@ install_sing_box() {
     ]
   },
   "route": {
+    "default_http_client": "direct-http",
     "default_domain_resolver": {
       "server": "$resolver_tag",
       "strategy": "$dns_strategy"
@@ -1249,8 +1255,7 @@ install_sing_box() {
           "googleusercontent.com",
           "ggpht.com",
           "googlevideo.com",
-          "ytimg.com",
-          "gs-loc-cn.apple.com"
+          "ytimg.com"
         ]
       },
       {
@@ -1299,11 +1304,11 @@ install_sing_box() {
         ]
       },
       {
-        "outbound": "block",
+        "action": "reject",
         "ip_is_private": true
       },
       {
-        "outbound": "block",
+        "action": "reject",
         "rule_set": [
           "geoip-cn",
           "geosite-cn"
@@ -1316,7 +1321,7 @@ install_sing_box() {
         "type": "remote",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-        "download_detour": "outbound-direct",
+        "http_client": "direct-http",
         "update_interval": "7d"
       },
       {
@@ -1324,7 +1329,7 @@ install_sing_box() {
         "type": "remote",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-        "download_detour": "outbound-direct",
+        "http_client": "direct-http",
         "update_interval": "7d"
       }
     ]
@@ -1406,10 +1411,6 @@ install_sing_box() {
     {
       "type": "direct",
       "tag": "outbound-direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
     }
   ]
 }

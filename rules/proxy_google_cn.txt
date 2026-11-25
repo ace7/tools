@@ -1,4 +1,4 @@
-# Google & Apple CN 域名（客户端走代理，服务端在 CN 阻断前放行）
+# Google CN 及关联静态域名（客户端走代理，服务端在 CN 阻断前放行）
 gstatic.com
 ampproject.org
 gvt1.com
@@ -9,4 +9,3 @@ googleusercontent.com
 ggpht.com
 googlevideo.com
 ytimg.com
-gs-loc-cn.apple.com

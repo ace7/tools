@@ -39,10 +39,6 @@ ADBLOCK_URLS = (
 
 GFWLIST_BASE64_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 CN_BLOCKED_DOMAINS_URL = "https://raw.githubusercontent.com/Johnshall/cn-blocked-domain/release/domains.txt"
-APPLE_NEWS_RULESET = (
-    "RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/"
-    "master/rule/Shadowrocket/AppleNews/AppleNews.list,PROXY"
-)
 
 LAN_CIDRS = (
     "192.168.0.0/16",
@@ -53,6 +49,69 @@ LAN_CIDRS = (
     "fe80::/10",
     "fc00::/7",
     "::1/128",
+)
+
+BASE_SKIP_PROXY = (
+    "192.168.0.0/16",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "fe80::/10",
+    "fc00::/7",
+    "localhost",
+    "*.local",
+    "*.lan",
+    "*.internal",
+    "e.crashlytics.com",
+    "captive.apple.com",
+    "sequoia.apple.com",
+    "seed-sequoia.siri.apple.com",
+)
+
+BASE_BYPASS_TUN = (
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.88.99.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "233.252.0.0/24",
+    "224.0.0.0/4",
+    "255.255.255.255/32",
+    "::1/128",
+    "::ffff:0:0/96",
+    "::ffff:0:0:0/96",
+    "64:ff9b::/96",
+    "64:ff9b:1::/48",
+    "100::/64",
+    "2001::/32",
+    "2001:20::/28",
+    "2001:db8::/32",
+    "2002::/16",
+    "3fff::/20",
+    "5f00::/16",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
+)
+
+TAILSCALE_HOME_SUBNET = "10.0.0.0/24"
+TAILSCALE_CGNAT_CIDR = "100.64.0.0/10"
+TAILSCALE_IPV6_CIDR = "fd7a:115c:a1e0::/48"
+TAILSCALE_DOMAIN_RULES = (
+    "DOMAIN-SUFFIX,ts.net,TAILSCALE",
+    "DOMAIN-SUFFIX,tailscale.com,DIRECT",
+    "DOMAIN-SUFFIX,tailscale.io,DIRECT",
+)
+TAILSCALE_CIDR_RULES = (
+    f"IP-CIDR,{TAILSCALE_HOME_SUBNET},TAILSCALE,no-resolve",
+    f"IP-CIDR,{TAILSCALE_CGNAT_CIDR},TAILSCALE,no-resolve",
+    f"IP-CIDR6,{TAILSCALE_IPV6_CIDR},TAILSCALE,no-resolve",
 )
 
 DOMAIN_RE = re.compile(
@@ -72,32 +131,102 @@ def read_list_file(path: Path) -> list[str]:
     return entries
 
 
+def read_apple_proxy_groups(path: Path) -> tuple[list[str], list[str]]:
+    """Split rules/proxy_apple.txt into ([ai] domains, [proxy] domains)."""
+    ai_domains: list[str] = []
+    proxy_domains: list[str] = []
+    current_group = "proxy"
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            lower_comment = stripped.lower()
+            if "[ai]" in lower_comment:
+                current_group = "ai"
+            elif "[proxy]" in lower_comment:
+                current_group = "proxy"
+            continue
+        line = raw.split("#", 1)[0].strip().lower()
+        if not line:
+            continue
+        if current_group == "ai":
+            ai_domains.append(line)
+        else:
+            proxy_domains.append(line)
+    return ai_domains, proxy_domains
+
+
+def build_tailscale_bypass_list(items: Iterable[str]) -> list[str]:
+    """Adjust skip-proxy / bypass-tun items so Tailscale & home LAN traffic enters TUN."""
+    home_net = ipaddress.ip_network(TAILSCALE_HOME_SUBNET)
+    ts_cgnat = ipaddress.ip_network(TAILSCALE_CGNAT_CIDR)
+    ula_net = ipaddress.ip_network("fc00::/7")
+
+    result: list[str] = []
+    for item in items:
+        try:
+            net = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            result.append(item)
+            continue
+
+        # Drop 100.64.0.0/10 and fc00::/7 from TUN/proxy exclusions (fc00::/7 still has
+        # a fallback DIRECT rule in [Rule] after fd7a:115c:a1e0::/48 -> TAILSCALE).
+        if net in (ts_cgnat, ula_net):
+            continue
+        if net.version == home_net.version and home_net.subnet_of(net):
+            result.extend(str(sub) for sub in net.address_exclude(home_net))
+            continue
+        result.append(item)
+    return result
+
+
 def sync_singbox_files(check_only: bool = False) -> None:
     """Sync shared domain lists into sing-box JSON configs and fq.sh."""
     direct_extra = read_list_file(SHARED_RULES_DIR / "direct_cn_extra.txt")
     google_cn = read_list_file(SHARED_RULES_DIR / "proxy_google_cn.txt")
+    apple_ai, apple_proxy = read_apple_proxy_groups(SHARED_RULES_DIR / "proxy_apple.txt")
     tiger_brokers = read_list_file(SHARED_RULES_DIR / "proxy_tiger_brokers.txt")
+
+    force_proxy_dns = google_cn + apple_ai + apple_proxy + tiger_brokers
 
     # 1. fq/sing-box-mac-client.json
     mac_path = REPO_ROOT / "fq" / "sing-box-mac-client.json"
     mac_text = mac_path.read_text(encoding="utf-8")
     mac_data = json.loads(mac_text)
+
+    dns_suffix_rules = [
+        r for r in mac_data["dns"]["rules"]
+        if "domain_suffix" in r and r.get("server") == "google-dns"
+    ]
     direct_rules = [
         r for r in mac_data["route"]["rules"]
         if "domain_suffix" in r and r.get("outbound") == "direct"
+    ]
+    ai_rules = [
+        r for r in mac_data["route"]["rules"]
+        if "domain_suffix" in r and r.get("outbound") == "ai"
     ]
     proxy_rules = [
         r for r in mac_data["route"]["rules"]
         if "domain_suffix" in r and r.get("outbound") == "proxy"
     ]
-    if len(direct_rules) != 1 or len(proxy_rules) != 2:
+    if (
+        len(dns_suffix_rules) != 1
+        or len(direct_rules) != 1
+        or len(ai_rules) != 1
+        or len(proxy_rules) != 3
+    ):
         raise RuntimeError(
             f"Unexpected domain_suffix rules structure in {mac_path}: "
-            f"{len(direct_rules)} direct, {len(proxy_rules)} proxy"
+            f"{len(dns_suffix_rules)} dns, {len(direct_rules)} direct, "
+            f"{len(ai_rules)} ai, {len(proxy_rules)} proxy"
         )
+    dns_suffix_rules[0]["domain_suffix"] = force_proxy_dns
     direct_rules[0]["domain_suffix"] = direct_extra
+    ai_rules[0]["domain_suffix"] = apple_ai
     proxy_rules[0]["domain_suffix"] = google_cn
-    proxy_rules[1]["domain_suffix"] = tiger_brokers
+    proxy_rules[1]["domain_suffix"] = apple_proxy
+    proxy_rules[2]["domain_suffix"] = tiger_brokers
     new_mac_text = json.dumps(mac_data, indent=2, ensure_ascii=False) + "\n"
 
     # 2. fq/sing-box-server.json
@@ -143,7 +272,7 @@ def sync_singbox_files(check_only: bool = False) -> None:
         r"(?:          \"[^\"]+\",?\n)+"
         r"        \]\n"
         r"      \},\n){2}"
-        r'(?=      \{\n        "outbound": "block",\n        "ip_is_private": true)'
+        r'(?=      \{\n        "action": "reject",\n        "ip_is_private": true)'
     )
     new_fq_sh_text, count = fq_pattern.subn(replacement_blocks, fq_sh_text, count=1)
     if count != 1:
@@ -286,7 +415,6 @@ def parse_adblock_lists(texts: Iterable[str], ignore_domains: set[str]) -> tuple
 
             if token[0].isdigit():
                 try:
-                    ipaddress.IPV4LENGTH  # noqa: B018
                     addr = ipaddress.ip_address(token)
                     blocked_ips.add(f"{addr}/32")
                     continue
@@ -378,7 +506,7 @@ def format_merged_routing_rules(direct: ParsedRuleSet, proxy: ParsedRuleSet) -> 
     for kw, action in kw_pairs:
         lines.append(f"DOMAIN-KEYWORD,{kw},{action}")
 
-    cidr_pairs = [(c, "DIRECT") for c in direct.cidrs] + [(c, "PROXY") for c in proxy.cidrs]
+    cidr_pairs = [(c, "DIRECT") for c in direct.cidrs] + [(c, "PROXY") for k_or_c in [proxy.cidrs] for c in k_or_c]
     cidr_pairs.sort(key=lambda item: (ipaddress.ip_network(item[0]).version, ipaddress.ip_network(item[0])))
     for cidr, action in cidr_pairs:
         lines.append(f"IP-CIDR,{cidr},{action}")
@@ -396,7 +524,7 @@ def format_reject_rules(reject: ParsedRuleSet) -> list[str]:
 
 
 def build_shadowrocket_confs() -> None:
-    """Fetch upstream lists and generate the 4 Shadowrocket .conf files."""
+    """Fetch upstream lists and generate the 6 Shadowrocket .conf files."""
     t0 = time.monotonic()
 
     direct_entries = (
@@ -405,6 +533,7 @@ def build_shadowrocket_confs() -> None:
     )
     proxy_entries = (
         read_list_file(SHARED_RULES_DIR / "proxy_google_cn.txt")
+        + read_list_file(SHARED_RULES_DIR / "proxy_apple.txt")
         + read_list_file(SHARED_RULES_DIR / "proxy_tiger_brokers.txt")
         + read_list_file(SR_RULES_DIR / "proxy.txt")
     )
@@ -455,44 +584,89 @@ def build_shadowrocket_confs() -> None:
     foot_tpl = (TEMPLATES_DIR / "foot.conf").read_text(encoding="utf-8")
     build_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+    std_skip_proxy = ", ".join(BASE_SKIP_PROXY)
+    std_bypass_tun = ",".join(BASE_BYPASS_TUN)
+    ts_skip_proxy = ", ".join(build_tailscale_bypass_list(BASE_SKIP_PROXY))
+    ts_bypass_tun = ",".join(build_tailscale_bypass_list(BASE_BYPASS_TUN))
+
     manual_reject_lines = format_reject_rules(reject_set)
     cnip_routing_lines = format_merged_routing_rules(direct_set, proxy_set)
     gfw_routing_lines = format_merged_routing_rules(direct_set, gfw_proxy_set)
+
     lan_lines = [f"IP-CIDR,{cidr},DIRECT" for cidr in LAN_CIDRS]
+    ts_lan_lines = [
+        f"IP-CIDR,{cidr},DIRECT"
+        for cidr in LAN_CIDRS
+        if cidr != TAILSCALE_CGNAT_CIDR
+    ]
     cn_geo_lines = ["DOMAIN-SUFFIX,cn,DIRECT", "GEOIP,CN,DIRECT"]
+    ts_domain_lines = list(TAILSCALE_DOMAIN_RULES)
+    ts_cidr_lines = list(TAILSCALE_CIDR_RULES)
 
     variants = (
         (
             "sr_cnip_ad",
             "CN/Proxy Split + AdBlock",
+            std_skip_proxy,
+            std_bypass_tun,
             manual_reject_lines + ad_lines + cnip_routing_lines + cn_geo_lines + lan_lines + ["FINAL,PROXY"],
         ),
         (
             "sr_cnip",
             "CN/Proxy Split",
+            std_skip_proxy,
+            std_bypass_tun,
             manual_reject_lines + cnip_routing_lines + cn_geo_lines + lan_lines + ["FINAL,PROXY"],
+        ),
+        (
+            "sr_cnip_ad_ts",
+            "CN/Proxy Split + AdBlock + Tailscale",
+            ts_skip_proxy,
+            ts_bypass_tun,
+            manual_reject_lines
+            + ad_lines
+            + ts_domain_lines
+            + cnip_routing_lines
+            + ts_cidr_lines
+            + cn_geo_lines
+            + ts_lan_lines
+            + ["FINAL,PROXY"],
+        ),
+        (
+            "sr_cnip_ts",
+            "CN/Proxy Split + Tailscale",
+            ts_skip_proxy,
+            ts_bypass_tun,
+            manual_reject_lines
+            + ts_domain_lines
+            + cnip_routing_lines
+            + ts_cidr_lines
+            + cn_geo_lines
+            + ts_lan_lines
+            + ["FINAL,PROXY"],
         ),
         (
             "sr_gfw_ad",
             "GFWList Blacklist + AdBlock",
-            manual_reject_lines
-            + ad_lines
-            + gfw_routing_lines
-            + [APPLE_NEWS_RULESET]
-            + lan_lines
-            + ["FINAL,DIRECT"],
+            std_skip_proxy,
+            std_bypass_tun,
+            manual_reject_lines + ad_lines + gfw_routing_lines + lan_lines + ["FINAL,DIRECT"],
         ),
         (
             "sr_gfw",
             "GFWList Blacklist",
-            manual_reject_lines + gfw_routing_lines + [APPLE_NEWS_RULESET] + lan_lines + ["FINAL,DIRECT"],
+            std_skip_proxy,
+            std_bypass_tun,
+            manual_reject_lines + gfw_routing_lines + lan_lines + ["FINAL,DIRECT"],
         ),
     )
 
-    for name, title, rule_lines in variants:
+    for name, title, skip_proxy, bypass_tun, rule_lines in variants:
         header = (
             head_tpl.replace("{{variant_title}}", title)
             .replace("{{build_time}}", build_time)
+            .replace("{{skip_proxy}}", skip_proxy)
+            .replace("{{bypass_tun}}", bypass_tun)
         )
         content = header + "\n".join(rule_lines) + "\n" + foot_tpl
         out_path = SR_DIR / f"{name}.conf"
@@ -501,7 +675,10 @@ def build_shadowrocket_confs() -> None:
         print(f"[build] Generated sr/{name}.conf ({len(rule_lines):,} rules, {size_kb:,.1f} KB)")
 
     elapsed = time.monotonic() - t0
-    print(f"[done] Built 4 Shadowrocket configs in {elapsed:.2f}s (AdBlock: {len(ad_lines):,}, GFWList: {len(gfw_domains):,})")
+    print(
+        f"[done] Built {len(variants)} Shadowrocket configs in {elapsed:.2f}s "
+        f"(AdBlock: {len(ad_lines):,}, GFWList: {len(gfw_domains):,})"
+    )
 
 
 def main() -> int:

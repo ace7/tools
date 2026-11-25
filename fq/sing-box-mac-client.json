@@ -5,8 +5,8 @@
   },
   "http_clients": [
     {
-      "tag": "direct-http",
-      "detour": "direct"
+      "tag": "proxy-out",
+      "detour": "proxy"
     }
   ],
   "experimental": {
@@ -24,10 +24,6 @@
   },
   "dns": {
     "servers": [
-      {
-        "type": "hosts",
-        "tag": "hosts"
-      },
       {
         "type": "tls",
         "tag": "google-dns",
@@ -52,11 +48,6 @@
     ],
     "rules": [
       {
-        "ip_accept_any": true,
-        "action": "route",
-        "server": "hosts"
-      },
-      {
         "clash_mode": "Direct",
         "action": "route",
         "server": "local-dns"
@@ -67,33 +58,87 @@
         "server": "google-dns"
       },
       {
+        "domain_suffix": [
+          "gstatic.com",
+          "ampproject.org",
+          "gvt1.com",
+          "gvt2.com",
+          "google.cn",
+          "googleapis.cn",
+          "googleusercontent.com",
+          "ggpht.com",
+          "googlevideo.com",
+          "ytimg.com",
+          "guzzoni.apple.com",
+          "siri.apple.com",
+          "smoot.apple.com",
+          "apple-relay.apple.com",
+          "apple-relay.cloudflare.com",
+          "apple-relay.fastly-edge.com",
+          "cp4.cloudflare.com",
+          "mask.icloud.com",
+          "mask-h2.icloud.com",
+          "mask-api.icloud.com",
+          "podcasts.apple.com",
+          "podcast.apple.com",
+          "doh.dns.apple.com",
+          "atigrpulse.com",
+          "atigrzen.com",
+          "etasphere.com",
+          "ftfast.com",
+          "gotigerhk.com",
+          "iotaskyt.com",
+          "iotaskyty.com",
+          "itiger-nz.com",
+          "itiger.com",
+          "itigergrowth.com",
+          "itigergrowtha.com",
+          "itigertrader.com",
+          "itigerup.com",
+          "laohu8.com",
+          "play-analytics.com",
+          "skytigris.cn",
+          "skytigris.com",
+          "thetigerbrokers.com",
+          "tigerbbs.cn",
+          "tigerbbs.com",
+          "tigerbrokers.com",
+          "tigerbrokers.com.au",
+          "tigerbrokers.com.hk",
+          "tigerbrokers.com.sg",
+          "tigerbrokers.nz",
+          "tigeresop.com",
+          "tigeresop.com.sg",
+          "tigerfintech.com",
+          "tigerhkgo.com",
+          "tigersecurities.com",
+          "tigertrader.app",
+          "tigr.link",
+          "tigrdw.com",
+          "tigrgood.com",
+          "tigrwd.com",
+          "tradeup.com",
+          "ttm.financial",
+          "xiaohu8.com",
+          "zhijianfengyi.cn",
+          "zhijianfengyi.com"
+        ],
+        "action": "route",
+        "server": "google-dns"
+      },
+      {
         "rule_set": "geosite-ads",
         "action": "reject"
       },
       {
         "rule_set": [
-          "geosite-cn",
+          "geosite-apple",
           "geosite-apple-cn",
+          "geosite-cn",
           "geosite-geolocation-cn"
         ],
         "action": "route",
         "server": "alidns"
-      },
-      {
-        "type": "logical",
-        "mode": "and",
-        "rules": [
-          {
-            "rule_set": "geosite-geolocation-!cn",
-            "invert": true
-          },
-          {
-            "rule_set": "geoip-cn"
-          }
-        ],
-        "action": "route",
-        "server": "google-dns",
-        "client_subnet": "114.114.114.114/24"
       },
       {
         "query_type": [
@@ -219,7 +264,6 @@
     }
   ],
   "route": {
-    "default_http_client": "direct-http",
     "rules": [
       {
         "action": "sniff"
@@ -288,6 +332,19 @@
       },
       {
         "domain_suffix": [
+          "guzzoni.apple.com",
+          "siri.apple.com",
+          "smoot.apple.com",
+          "apple-relay.apple.com",
+          "apple-relay.cloudflare.com",
+          "apple-relay.fastly-edge.com",
+          "cp4.cloudflare.com"
+        ],
+        "action": "route",
+        "outbound": "ai"
+      },
+      {
+        "domain_suffix": [
           "gstatic.com",
           "ampproject.org",
           "gvt1.com",
@@ -297,8 +354,19 @@
           "googleusercontent.com",
           "ggpht.com",
           "googlevideo.com",
-          "ytimg.com",
-          "gs-loc-cn.apple.com"
+          "ytimg.com"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      },
+      {
+        "domain_suffix": [
+          "mask.icloud.com",
+          "mask-h2.icloud.com",
+          "mask-api.icloud.com",
+          "podcasts.apple.com",
+          "podcast.apple.com",
+          "doh.dns.apple.com"
         ],
         "action": "route",
         "outbound": "proxy"
@@ -403,65 +471,75 @@
         "type": "remote",
         "tag": "geosite-cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-cn.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geoip-cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-ads",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-category-ads-all.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-category-ads-all.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-apple",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-apple.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-apple.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-apple-cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-apple@cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-apple@cn.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-openai",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-openai.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-openai.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-anthropic",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-anthropic.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-anthropic.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-category-ai-chat-!cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-category-ai-chat-!cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-category-ai-chat-!cn.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-geolocation-cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs",
+        "http_client": "proxy-out"
       },
       {
         "type": "remote",
         "tag": "geosite-geolocation-!cn",
         "format": "binary",
-        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-!cn.srs"
+        "url": "https://testingcf.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-!cn.srs",
+        "http_client": "proxy-out"
       }
     ],
     "final": "proxy",
     "auto_detect_interface": true,
-    "default_domain_resolver": "local-dns"
+    "default_domain_resolver": "alidns"
   }
 }

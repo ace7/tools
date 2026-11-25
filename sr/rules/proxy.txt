@@ -1,5 +1,5 @@
 # Shadowrocket 手工代理列表
-# 注：Google/Apple CN 与老虎证券域名已抽离至 ../../rules/ 共用
+# 注：Google CN、Apple 特例与老虎证券域名已抽离至 ../../rules/ 共用
 
 # TED
 tedcdn.com
@@ -72,69 +72,6 @@ location.microsoft.com
 # 学术与资讯
 mendeley.com
 vox.com
-
-# Apple News
-news-events.apple.com
-news-edge.apple.com
-news-client-search.apple.com
-apple.comscoreresearch.com
-play.itunes.apple.com
-play-cdn.itunes-apple.com.akadns.net
-cvws.apple-dns.net
-news.apple-dns.net
-gateway.fe.apple-dns.net
-akamaiedge.net
-gs-loc.apple.com
-bag.itunes.apple.com
-apple.news
-news.iadsdk.apple.com
-
-# Apple CDN、Siri、定位与 iCloud Private Relay
-aaplimg.com
-adcdownload.apple.com.akadns.net
-appldnld.g.aaplimg.com
-apple-relay.apple.com
-apple-relay.cloudflare.com
-apple-relay.fastly-edge.com
-cds-cdn.v.aaplimg.com
-cds.apple.com.akadns.net
-cl1-cdn.origin-apple.com.akadns.net
-cl3-cdn.origin-apple.com.akadns.net
-cl4-cdn.origin-apple.com.akadns.net
-cl5-cdn.origin-apple.com.akadns.net
-clientflow.apple.com.akadns.net
-configuration.apple.com.akadns.net
-cp4.cloudflare.com
-dd-cdn.origin-apple.com.akadns.net
-gateway.icloud.com
-gdmf.apple.com
-gspe19-cn.ls-apple.com.akadns.net
-guzzoni.apple.com
-icloud-cdn.icloud.com.akadns.net
-init-p01md-lb.push-apple.com.akadns.net
-init-p01st-lb.push-apple.com.akadns.net
-init-s01st-lb.push-apple.com.akadns.net
-itunes-apple.com.akadns.net
-ls.apple.com
-mask.icloud.com
-mask-h2.icloud.com
-mesu-cdn.apple.com.akadns.net
-mesu-china.apple.com.akadns.net
-ocsp-lb.apple.com.akadns.net
-oscdn.origin-apple.com.akadns.net
-pancake.cdn-apple.com.akadns.net
-phobos.apple.com
-probe.icloud.com
-prod-support.apple-support.akadns.net
-siri.apple.com
-smoot.apple.com
-stocks-sparkline-lb.apple.com.akadns.net
-store.storeimages.apple.com.akadns.net
-support-china.apple-support.akadns.net
-swcatalog-cdn.apple.com.akadns.net
-swdist.apple.com.akadns.net
-swscan-cdn.apple.com.akadns.net
-valid.origin-apple.com.akadns.net
 
 # GitHub
 raw.githubusercontent.com

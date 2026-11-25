@@ -7,8 +7,7 @@
     },
     "http_clients": [
         {
-            "tag": "direct-http",
-            "detour": "outbound-direct"
+            "tag": "direct-http"
         }
     ],
     "dns": {
@@ -55,8 +54,7 @@
                     "googleusercontent.com",
                     "ggpht.com",
                     "googlevideo.com",
-                    "ytimg.com",
-                    "gs-loc-cn.apple.com"
+                    "ytimg.com"
                 ]
             },
             {
@@ -105,11 +103,11 @@
                 ]
             },
             {
-                "outbound": "block",
+                "action": "reject",
                 "ip_is_private": true
             },
             {
-                "outbound": "block",
+                "action": "reject",
                 "rule_set": [
                     "geoip-cn",
                     "geosite-cn"
@@ -122,6 +120,7 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+                "http_client": "direct-http",
                 "update_interval": "7d"
             },
             {
@@ -129,6 +128,7 @@
                 "type": "remote",
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+                "http_client": "direct-http",
                 "update_interval": "7d"
             }
         ]
@@ -176,10 +176,6 @@
         {
             "type": "direct",
             "tag": "outbound-direct"
-        },
-        {
-            "type": "block",
-            "tag": "block"
         }
     ]
 }

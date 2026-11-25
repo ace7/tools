@@ -1,0 +1,20 @@
+# Apple 海外锁区与被阻断域名（客户端走代理；不属于 @cn，无需写入服务端 CN 白名单）
+
+# [ai] Siri & Apple Intelligence (Private Cloud Compute)
+guzzoni.apple.com
+siri.apple.com
+smoot.apple.com
+apple-relay.apple.com
+apple-relay.cloudflare.com
+apple-relay.fastly-edge.com
+cp4.cloudflare.com
+
+# [proxy] iCloud Private Relay
+mask.icloud.com
+mask-h2.icloud.com
+mask-api.icloud.com
+
+# [proxy] 国内被阻断的 Apple 服务（播客与加密 DNS）
+podcasts.apple.com
+podcast.apple.com
+doh.dns.apple.com

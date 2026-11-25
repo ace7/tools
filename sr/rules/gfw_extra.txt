@@ -11,7 +11,6 @@ news.now.com
 picturedip.com
 uchicago.edu
 xda-developers.com
-phobos
 
 # Telegram 补充网段
 67.198.55.0/24

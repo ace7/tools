@@ -22,7 +22,8 @@ tools/
 ├── wrangler.jsonc              # Cloudflare Worker 配置（build.command + assets + cron trigger）
 ├── worker.js                   # 404 兜底与每日定时触发 Deploy Hook
 ├── rules/                      # 跨客户端（sing-box + fq.sh + Shadowrocket）共用的域名单一事实来源
-│   ├── proxy_google_cn.txt     # Google & Apple CN 域名（客户端走代理，服务端在 CN 阻断前放行）
+│   ├── proxy_google_cn.txt     # Google CN 及关联静态域名（客户端走代理，服务端在 CN 阻断前放行）
+│   ├── proxy_apple.txt         # Apple AI / Private Relay / Podcasts 域名（客户端走代理，无需写服务端）
 │   ├── proxy_tiger_brokers.txt # 老虎证券域名（客户端走代理，服务端在 CN 阻断前放行）
 │   └── direct_cn_extra.txt     # 国内补充直连域名（跨 sing-box 客户端与 Shadowrocket 共用）
 ├── fq/                         # VPS 自动化部署脚本与客户端配置模板
@@ -49,22 +50,24 @@ tools/
 ## 3. 核心开发规范与不变量（必读）
 
 ### 3.1 跨客户端共享域名同步机制
-- `rules/proxy_google_cn.txt`、`rules/proxy_tiger_brokers.txt`、`rules/direct_cn_extra.txt` 是**唯一事实来源**。
+- `rules/proxy_google_cn.txt`、`rules/proxy_apple.txt`、`rules/proxy_tiger_brokers.txt`、`rules/direct_cn_extra.txt` 是**唯一事实来源**。
 - 修改 `rules/*.txt` 后，**必须运行 `python3 sr/build.py --sync-only`**，脚本会自动把列表同步写入以下三处：
-  1. `fq/sing-box-mac-client.json` 的 `domain_suffix` 路由规则（2 空格缩进）
-  2. `fq/sing-box-server.json` 的 `domain_suffix` 放行白名单（4 空格缩进）
+  1. `fq/sing-box-mac-client.json` 的 `dns.rules`（`google-dns`）与 `route.rules`（`direct` / `ai` / `proxy`）域名后缀规则（2 空格缩进）
+  2. `fq/sing-box-server.json` 的 `domain_suffix` 放行白名单（仅同步 `proxy_google_cn.txt` 与 `proxy_tiger_brokers.txt`，4 空格缩进）
   3. `fq/fq.sh` 内嵌服务端配置模板中的两段 `domain_suffix` 放行白名单
 - **切勿**只手动编辑 `sing-box-*.json` 或 `fq.sh` 里的上述共享域名数组而不改 `rules/*.txt`，否则下次运行 `sr/build.py` 会被覆盖回退。
 
 ### 3.2 Shadowrocket 规则优先级与去重逻辑
-- **生成的 `.conf` 文件绝不入库**：`sr/sr_{cnip_ad,cnip,gfw_ad,gfw}.conf` 已配置在 `.gitignore` 中，仅在本地测试或云端部署阶段动态生成。
+- **生成的 `.conf` 文件绝不入库**：`sr/sr_{cnip_ad,cnip,cnip_ad_ts,cnip_ts,gfw_ad,gfw}.conf` 已配置在 `.gitignore` 中，仅在本地测试或云端部署阶段动态生成。其中 `*_ts.conf` 专为启用内置 Tailscale 模块场景定制（从 `bypass-tun` / `skip-proxy` 精确剥离 `100.64.0.0/10`、`fc00::/7` 与家庭子网 `10.0.0.0/24`，并在规则中指向 `TAILSCALE` 策略）。
 - **手工规则零冲突检查**：`direct`、`proxy`、`reject` 合并共享列表后若存在完全相同的条目，`sr/build.py` 会直接抛错中止构建。
 - **规则匹配顺序**：
   1. `reject.txt`（手工 `REJECT`）
-  2. 上游 AdBlock 列表（仅 `*_ad.conf` 含此段，受 `ad_ignore.txt` 保护并自动裁剪已被父后缀覆盖的冗余子域名）
-  3. 手工与共享路由规则（`DOMAIN-SUFFIX` 按**域名层级从多到少**排序，确保如 `cn.bing.com,DIRECT` 永远排在 `bing.com,PROXY` 之前、`play.itunes.apple.com,PROXY` 排在 `itunes.apple.com,DIRECT` 之前；随后输出 `DOMAIN-KEYWORD` 与规范化后的 `IP-CIDR`）
-  4. `DOMAIN-SUFFIX,cn,DIRECT` + `GEOIP,CN,DIRECT`（仅 `sr_cnip*`）及局域网保留网段 `DIRECT`
-  5. `FINAL,PROXY`（`sr_cnip*`）或 `FINAL,DIRECT`（`sr_gfw*`）
+  2. 上游 AdBlock 列表（仅 `*_ad*.conf` 含此段，受 `ad_ignore.txt` 保护并自动裁剪已被父后缀覆盖的冗余子域名）
+  3. Tailscale 域名规则（仅 `*_ts.conf`：`ts.net` 走 `TAILSCALE`，`tailscale.com` / `tailscale.io` 走 `DIRECT`）
+  4. 手工与共享路由规则（`DOMAIN-SUFFIX` 按**域名层级从多到少**排序，确保如 `cn.bing.com,DIRECT` 排在 `bing.com,PROXY` 之前、`guzzoni.apple.com,PROXY` 排在 `apple.com,DIRECT` 之前；随后输出 `DOMAIN-KEYWORD` 与规范化后的 `IP-CIDR`）
+  5. Tailscale 网段规则（仅 `*_ts.conf`：`10.0.0.0/24`、`100.64.0.0/10`、`fd7a:115c:a1e0::/48` 走 `TAILSCALE`）
+  6. `DOMAIN-SUFFIX,cn,DIRECT` + `GEOIP,CN,DIRECT`（仅 `sr_cnip*`）及局域网保留网段 `DIRECT`
+  7. `FINAL,PROXY`（`sr_cnip*`）或 `FINAL,DIRECT`（`sr_gfw*`）
 - **广告豁免**：若新增某个代理/直连域名同时存在于上游 EasyList 广告源中（例如 `googleadservices.com`、`googletagmanager.com`、`t.co`），需同步加入 `sr/rules/ad_ignore.txt`，否则在 `*_ad.conf` 中会被上游广告段优先 `REJECT`。
 
 ### 3.3 构建脚本零外部依赖约束
@@ -88,7 +91,7 @@ python3 sr/build.py --sync-only
 # 2. 校验跨端共享域名是否完全同步
 python3 sr/build.py --check-sync
 
-# 3. 全量拉取上游源并构建 4 份 Shadowrocket .conf（需联网，耗时约 2~3 秒）
+# 3. 全量拉取上游源并构建 6 份 Shadowrocket .conf（需联网，耗时约 2~3 秒）
 python3 sr/build.py
 
 # 4. 校验 Shell、JSON 与 Worker JS 语法
