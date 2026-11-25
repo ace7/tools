@@ -1,0 +1,29 @@
+# GFWList 补充代理规则（仅用于 sr_gfw / sr_gfw_ad 黑名单模式）
+i-scmp.com
+search.xxx
+50.7.31.230
+blogspot
+google
+akamaihd.net
+azurewebsites.net
+4sqi.net
+news.now.com
+picturedip.com
+uchicago.edu
+xda-developers.com
+phobos
+
+# Telegram 补充网段
+67.198.55.0/24
+109.239.140.0/24
+149.154.164.0/22
+149.154.168.0/22
+149.154.172.0/22
+
+# Google Voice 补充
+74.125.23.127
+
+# Hacker News & Web3
+news.ycombinator.com
+trustwallet.com
+walletconnect.org

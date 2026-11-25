@@ -1,0 +1,4 @@
+# 上游广告规则例外白名单（精确域名及其子域名不从上游 AdBlock 列表中拦截）
+t.co
+googletagmanager.com
+googleadservices.com

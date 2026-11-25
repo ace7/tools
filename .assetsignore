@@ -1,0 +1,17 @@
+.git
+.gitignore
+.assetsignore
+.vscode
+.wrangler
+.dev.vars*
+.env*
+.DS_Store
+__pycache__
+*.pyc
+wrangler.jsonc
+worker.js
+fq/mask_singbox.py
+rules
+sr/build.py
+sr/rules
+sr/templates

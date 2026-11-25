@@ -1,0 +1,4 @@
+# 国内业务与数据接口补充直连域名（跨 sing-box 与 Shadowrocket 共用）
+alibabacloud.com
+waditu.com
+tushare.pro

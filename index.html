@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Files</title>
+    <title>Tools & Rules</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -19,9 +19,16 @@
             border-bottom: 2px solid #3498db;
             padding-bottom: 0.5rem;
         }
+        h2 {
+            color: #34495e;
+            font-size: 1.15rem;
+            margin-top: 2rem;
+            margin-bottom: 0.75rem;
+        }
         .file-list {
             list-style: none;
             padding: 0;
+            margin: 0;
         }
         .file-item {
             background: #fff;
@@ -36,7 +43,9 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 0.75rem;
             margin-bottom: 0.5rem;
+            flex-wrap: wrap;
         }
         .file-name {
             font-weight: 600;
@@ -46,6 +55,10 @@
         }
         .file-name:hover {
             text-decoration: underline;
+        }
+        .file-desc {
+            font-size: 0.85rem;
+            color: #636e72;
         }
         .install-box {
             background: #2d3436;
@@ -63,7 +76,12 @@
             white-space: nowrap;
             margin-right: 1rem;
         }
-        .copy-btn {
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+        .copy-btn, .import-btn {
             background: #636e72;
             color: white;
             border: none;
@@ -71,14 +89,24 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 0.8rem;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            text-decoration: none;
             transition: background 0.2s;
             flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
         }
         .copy-btn:hover {
             background: #b2bec3;
         }
         .copy-btn.success {
             background: #27ae60;
+        }
+        .import-btn {
+            background: #2980b9;
+        }
+        .import-btn:hover {
+            background: #3498db;
         }
         .icon {
             margin-right: 5px;
@@ -87,7 +115,9 @@
     </style>
 </head>
 <body>
-    <h1>Files</h1>
+    <h1>Tools & Rules</h1>
+
+    <h2>FQ & Sing-box</h2>
     <ul class="file-list">
         <li class="file-item">
             <div class="file-info">
@@ -108,7 +138,7 @@
             <div class="install-box">
                 <code class="install-cmd" id="setup-home-cmd">curl -fsSL <span class="origin"></span>/fq/setup-home.sh | bash</code>
                 <button class="copy-btn" onclick="copyCmd('setup-home-cmd', this)">
-                    <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path></svg>
+                    <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy
                 </button>
             </div>
@@ -137,13 +167,86 @@
         </li>
     </ul>
 
+    <h2>Shadowrocket Rules</h2>
+    <ul class="file-list">
+        <li class="file-item">
+            <div class="file-info">
+                <a class="file-name" href="sr/sr_cnip_ad.conf">sr_cnip_ad.conf</a>
+                <span class="file-desc">国内外分流 + 去广告（推荐）</span>
+            </div>
+            <div class="install-box">
+                <code class="install-cmd" id="sr-cnip-ad-cmd"><span class="origin"></span>/sr/sr_cnip_ad.conf</code>
+                <div class="btn-group">
+                    <a class="import-btn sr-import" data-path="/sr/sr_cnip_ad.conf" href="sr/sr_cnip_ad.conf">Import</a>
+                    <button class="copy-btn" onclick="copyCmd('sr-cnip-ad-cmd', this)">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </li>
+        <li class="file-item">
+            <div class="file-info">
+                <a class="file-name" href="sr/sr_cnip.conf">sr_cnip.conf</a>
+                <span class="file-desc">国内外分流（无上游广告列表）</span>
+            </div>
+            <div class="install-box">
+                <code class="install-cmd" id="sr-cnip-cmd"><span class="origin"></span>/sr/sr_cnip.conf</code>
+                <div class="btn-group">
+                    <a class="import-btn sr-import" data-path="/sr/sr_cnip.conf" href="sr/sr_cnip.conf">Import</a>
+                    <button class="copy-btn" onclick="copyCmd('sr-cnip-cmd', this)">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </li>
+        <li class="file-item">
+            <div class="file-info">
+                <a class="file-name" href="sr/sr_gfw_ad.conf">sr_gfw_ad.conf</a>
+                <span class="file-desc">GFWList 黑名单 + 去广告</span>
+            </div>
+            <div class="install-box">
+                <code class="install-cmd" id="sr-gfw-ad-cmd"><span class="origin"></span>/sr/sr_gfw_ad.conf</code>
+                <div class="btn-group">
+                    <a class="import-btn sr-import" data-path="/sr/sr_gfw_ad.conf" href="sr/sr_gfw_ad.conf">Import</a>
+                    <button class="copy-btn" onclick="copyCmd('sr-gfw-ad-cmd', this)">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </li>
+        <li class="file-item">
+            <div class="file-info">
+                <a class="file-name" href="sr/sr_gfw.conf">sr_gfw.conf</a>
+                <span class="file-desc">GFWList 黑名单（无上游广告列表）</span>
+            </div>
+            <div class="install-box">
+                <code class="install-cmd" id="sr-gfw-cmd"><span class="origin"></span>/sr/sr_gfw.conf</code>
+                <div class="btn-group">
+                    <a class="import-btn sr-import" data-path="/sr/sr_gfw.conf" href="sr/sr_gfw.conf">Import</a>
+                    <button class="copy-btn" onclick="copyCmd('sr-gfw-cmd', this)">
+                        <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        Copy
+                    </button>
+                </div>
+            </div>
+        </li>
+    </ul>
+
     <script>
+        const origin = window.location.origin === 'null' ? '' : window.location.origin;
+
         document.querySelectorAll('.origin').forEach(el => {
-            // 如果是 file:// 协议，则 origin 为空字符串，此时 curl 命令会显示为相对路径，虽然不可执行但链接是对的
-            // 如果是 http/https，origin 会包含协议和域名
-            const origin = window.location.origin === 'null' ? '' : window.location.origin;
             el.textContent = origin;
         });
+
+        if (origin) {
+            document.querySelectorAll('.sr-import').forEach(el => {
+                el.href = 'shadowrocket://config/add/' + origin + el.dataset.path;
+            });
+        }
 
         function copyCmd(id, btn) {
             const cmd = document.getElementById(id).textContent;

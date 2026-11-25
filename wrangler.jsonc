@@ -1,12 +1,21 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tools",
+  "main": "worker.js",
   "compatibility_date": "2026-04-26",
   "observability": {
     "enabled": true
   },
+  "build": {
+    "command": "python3 sr/build.py"
+  },
   "assets": {
     "directory": "."
+  },
+  "triggers": {
+    "crons": [
+      "0 0 * * *"
+    ]
   },
   "compatibility_flags": [
     "nodejs_compat"

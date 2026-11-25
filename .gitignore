@@ -1,4 +1,10 @@
 .vscode/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Generated Shadowrocket rules (built dynamically during deploy)
+/sr/*.conf
 
 # wrangler files
 .wrangler

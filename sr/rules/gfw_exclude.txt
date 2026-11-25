@@ -1,0 +1,2 @@
+# 从上游 GFWList 排除的误判直连域名
+apple.com
