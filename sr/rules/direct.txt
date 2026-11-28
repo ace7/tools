@@ -62,3 +62,11 @@ rajax.me
 qq.com
 qq.com.cn
 knockdream.com
+
+# 小红书（RedNote）与国内统计补充直连
+xiaohongshu.com
+xhscdn.com
+xhscdn.net
+rednotecdn.com
+xhslink.com
+shujupie.com

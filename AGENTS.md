@@ -64,7 +64,7 @@ tools/
   1. `reject.txt`（手工 `REJECT`）
   2. 上游 AdBlock 列表（仅 `*_ad*.conf` 含此段，受 `ad_ignore.txt` 保护并自动裁剪已被父后缀覆盖的冗余子域名）
   3. Tailscale 域名规则（仅 `*_ts.conf`：`ts.net` 走 `TAILSCALE`，`tailscale.com` / `tailscale.io` 走 `DIRECT`）
-  4. 手工与共享路由规则（`DOMAIN-SUFFIX` 按**域名层级从多到少**排序，确保如 `cn.bing.com,DIRECT` 排在 `bing.com,PROXY` 之前、`guzzoni.apple.com,PROXY` 排在 `apple.com,DIRECT` 之前；随后输出 `DOMAIN-KEYWORD` 与规范化后的 `IP-CIDR`）
+  4. 手工与共享路由规则（`sr_cnip*` 额外并入上游 `blackmatrix7/China_Domain.list` 国内主流直连域名，并自动剔除与手工 `proxy`/`reject` 冲突项；`DOMAIN-SUFFIX` 按**域名层级从多到少**排序，确保如 `cn.bing.com,DIRECT` 排在 `bing.com,PROXY` 之前、`guzzoni.apple.com,PROXY` 排在 `apple.com,DIRECT` 之前；随后输出 `DOMAIN-KEYWORD` 与规范化后的 `IP-CIDR`）
   5. Tailscale 网段规则（仅 `*_ts.conf`：`10.0.0.0/24`、`100.64.0.0/10`、`fd7a:115c:a1e0::/48` 走 `TAILSCALE`）
   6. `DOMAIN-SUFFIX,cn,DIRECT` + `GEOIP,CN,DIRECT`（仅 `sr_cnip*`）及局域网保留网段 `DIRECT`
   7. `FINAL,PROXY`（`sr_cnip*`）或 `FINAL,DIRECT`（`sr_gfw*`）

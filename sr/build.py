@@ -39,6 +39,10 @@ ADBLOCK_URLS = (
 
 GFWLIST_BASE64_URL = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 CN_BLOCKED_DOMAINS_URL = "https://raw.githubusercontent.com/Johnshall/cn-blocked-domain/release/domains.txt"
+CHINA_DOMAINS_URL = (
+    "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/"
+    "master/rule/Shadowrocket/China/China_Domain.list"
+)
 
 LAN_CIDRS = (
     "192.168.0.0/16",
@@ -459,6 +463,29 @@ def parse_gfwlist(gfw_b64: str, cn_blocked_raw: str, excludes: set[str]) -> set[
     return domains
 
 
+def parse_china_domains(
+    raw_text: str,
+    excluded_domains: set[str],
+    already_direct: set[str],
+) -> set[str]:
+    """Parse upstream China_Domain.list into deduplicated non-.cn direct domain suffixes."""
+    domains: set[str] = set()
+    for raw in raw_text.splitlines():
+        row = raw.strip().lower()
+        if not row or row.startswith("#"):
+            continue
+        if row.startswith("."):
+            row = row[1:]
+        if not row or row == "cn" or row.endswith(".cn"):
+            continue
+        if not DOMAIN_RE.match(row):
+            continue
+        if is_subdomain_or_same(row, excluded_domains) or is_subdomain_or_same(row, already_direct):
+            continue
+        domains.add(row)
+    return set(prune_redundant_subdomains(domains))
+
+
 class ParsedRuleSet:
     """Normalized collection of DOMAIN-SUFFIX, DOMAIN-KEYWORD, and IP-CIDR entries."""
 
@@ -549,7 +576,7 @@ def build_shadowrocket_confs() -> None:
 
     check_manual_conflicts(direct_set, proxy_set, reject_set)
 
-    all_urls = list(ADBLOCK_URLS) + [GFWLIST_BASE64_URL, CN_BLOCKED_DOMAINS_URL]
+    all_urls = list(ADBLOCK_URLS) + [GFWLIST_BASE64_URL, CN_BLOCKED_DOMAINS_URL, CHINA_DOMAINS_URL]
     print(f"[fetch] Downloading {len(all_urls)} upstream rule lists in parallel...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_urls)) as pool:
         future_map = {url: pool.submit(fetch_url, url) for url in all_urls}
@@ -563,6 +590,16 @@ def build_shadowrocket_confs() -> None:
     ad_lines = [f"DOMAIN-SUFFIX,{d},REJECT" for d in ad_domains] + [
         f"IP-CIDR,{c},REJECT" for c in ad_ips
     ]
+
+    china_domains = parse_china_domains(
+        fetched[CHINA_DOMAINS_URL],
+        excluded_domains=proxy_set.domains | reject_set.domains,
+        already_direct=direct_set.domains,
+    )
+    cnip_direct_set = ParsedRuleSet([])
+    cnip_direct_set.domains = direct_set.domains | china_domains
+    cnip_direct_set.keywords = set(direct_set.keywords)
+    cnip_direct_set.cidrs = set(direct_set.cidrs)
 
     gfw_domains = parse_gfwlist(
         fetched[GFWLIST_BASE64_URL],
@@ -590,7 +627,7 @@ def build_shadowrocket_confs() -> None:
     ts_bypass_tun = ",".join(build_tailscale_bypass_list(BASE_BYPASS_TUN))
 
     manual_reject_lines = format_reject_rules(reject_set)
-    cnip_routing_lines = format_merged_routing_rules(direct_set, proxy_set)
+    cnip_routing_lines = format_merged_routing_rules(cnip_direct_set, proxy_set)
     gfw_routing_lines = format_merged_routing_rules(direct_set, gfw_proxy_set)
 
     lan_lines = [f"IP-CIDR,{cidr},DIRECT" for cidr in LAN_CIDRS]
@@ -677,7 +714,7 @@ def build_shadowrocket_confs() -> None:
     elapsed = time.monotonic() - t0
     print(
         f"[done] Built {len(variants)} Shadowrocket configs in {elapsed:.2f}s "
-        f"(AdBlock: {len(ad_lines):,}, GFWList: {len(gfw_domains):,})"
+        f"(AdBlock: {len(ad_lines):,}, ChinaDomains: {len(china_domains):,}, GFWList: {len(gfw_domains):,})"
     )
 
 
